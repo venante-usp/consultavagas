@@ -589,10 +589,13 @@
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000,
-            // Pool de trabalhadores: começa a próxima disciplina assim que uma consulta termina.
-            LIMITE_PARALELO: 6,
-            TIMEOUT_REQUISICAO: 9000,
-            ATRASO_PROXY_RESERVA: 2500,
+            // Uma consulta por vez: o Júpiter e os proxies públicos bloqueiam
+            // sequências paralelas com HTTP 429 (limite de requisições).
+            LIMITE_PARALELO: 1,
+            INTERVALO_ENTRE_CONSULTAS: 1400,
+            PAUSA_APOS_RATE_LIMIT: 20000,
+            TENTATIVAS_POR_PROXY_EM_429: 2,
+            TIMEOUT_REQUISICAO: 15000,
             PROXIES_CORS: [
                 url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
                 url => `https://corsproxy.io/?${encodeURIComponent(url)}`
@@ -709,7 +712,7 @@
             }
 
             static async executarScanCompleto() {
-                if (this.executando.scanCompleto) return;
+                if (this.executando.scanCompleto || this.executando.atualizacaoLeve) return;
 
                 this.executando.scanCompleto = true;
                 limparAlertas();
@@ -717,12 +720,12 @@
 
                 try {
                     const codigosPNV = CONFIGURACAO.CODIGOS_PNV;
-                    mostrarCarregando(`Consulta acelerada: preparando ${codigosPNV.length} disciplinas PNV...`);
+                    mostrarCarregando(`Consulta gradual: preparando ${codigosPNV.length} disciplinas PNV...`);
                     atualizarContador('⏳ Iniciando consulta...');
 
                     const resultado = await buscarDisciplinasComLimite(codigosPNV, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
-                            mostrarCarregando(`Consulta acelerada: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
+                            mostrarCarregando(`Consulta gradual: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
                             atualizarContador(`⚡ ${concluidas}/${total} consultadas — ${encontradas} com turmas`);
                         }
                     });
@@ -761,7 +764,7 @@
                     const codigos = todasDisciplinas.map(d => d.codigo);
                     const resultado = await buscarDisciplinasComLimite(codigos, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
-                            atualizarContador(`⚡ Atualizando ${concluidas}/${total} — falhas: ${falhas}`);
+                            atualizarContador(`🔄 Atualizando ${concluidas}/${total} — falhas: ${falhas}`);
                         }
                     });
 
@@ -829,6 +832,29 @@
         }
 
         let indiceProxyPreferido = 0;
+        let proximaConsultaPermitida = 0;
+
+        function esperar(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function aguardarJanelaDeConsulta() {
+            const agora = Date.now();
+            const espera = Math.max(0, proximaConsultaPermitida - agora);
+            if (espera > 0) await esperar(espera);
+            proximaConsultaPermitida = Date.now() + CONFIGURACAO.INTERVALO_ENTRE_CONSULTAS;
+        }
+
+        function ehRateLimit(erro) {
+            return erro?.status === 429 || /HTTP\s*429|rate.?limit|muitas requisições/i.test(erro?.message || '');
+        }
+
+        async function aplicarPausaPorRateLimit() {
+            const ate = Date.now() + CONFIGURACAO.PAUSA_APOS_RATE_LIMIT;
+            proximaConsultaPermitida = Math.max(proximaConsultaPermitida, ate);
+            atualizarContador(`⏸️ Limite de consultas detectado. Retomando em ${Math.ceil(CONFIGURACAO.PAUSA_APOS_RATE_LIMIT / 1000)} s...`);
+            await esperar(Math.max(0, proximaConsultaPermitida - Date.now()));
+        }
 
         async function buscarDetalhesDiscip(codigoDiscip) {
             const urlAlvo = CONFIGURACAO.URL_DETALHES_TURMA + encodeURIComponent(codigoDiscip);
@@ -839,10 +865,7 @@
 
             try {
                 const html = await buscarPrimeiraRespostaValida(urlAlvo, ordem);
-                if (!html || html.length < 100) {
-                    throw new Error('Resposta vazia ou incompleta');
-                }
-
+                if (!html || html.length < 100) throw new Error('Resposta vazia ou incompleta');
                 if (/Nenhum registro encontrado|nenhum registro/i.test(html)) return null;
 
                 const turmas = extrairDetalhesTurmas(html);
@@ -861,20 +884,36 @@
         async function buscarPrimeiraRespostaValida(urlAlvo, ordem) {
             const erros = [];
 
-            // Tenta um proxy por vez. A versão anterior consultava os dois ao mesmo
-            // tempo, dobrando a carga e provocando bloqueios/rate limit.
+            // A fila é serial e espaçada. Em caso de HTTP 429, há uma pausa antes
+            // de tentar novamente, em vez de disparar novas consultas em sequência.
             for (const indiceProxy of ordem) {
-                try {
-                    const urlProxy = CONFIGURACAO.PROXIES_CORS[indiceProxy](urlAlvo);
-                    const html = await buscarTextoComTimeout(urlProxy);
-                    if (!html || html.length < 100) throw new Error('Resposta vazia ou incompleta');
-                    if (!/Lista\s+de\s+Turmas|C[oó]digo\s+da\s+Turma|C digo\s+da\s+Turma/i.test(html)) {
-                        throw new Error('O proxy retornou uma página intermediária, não os dados do Júpiter');
+                const urlProxy = CONFIGURACAO.PROXIES_CORS[indiceProxy](urlAlvo);
+
+                for (let tentativa = 1; tentativa <= CONFIGURACAO.TENTATIVAS_POR_PROXY_EM_429; tentativa++) {
+                    try {
+                        await aguardarJanelaDeConsulta();
+                        const html = await buscarTextoComTimeout(urlProxy);
+                        if (!html || html.length < 100) throw new Error('Resposta vazia ou incompleta');
+                        if (!/Lista\s+de\s+Turmas|C[oó]digo\s+da\s+Turma|C digo\s+da\s+Turma/i.test(html)) {
+                            throw new Error('O proxy retornou uma página intermediária, não os dados do Júpiter');
+                        }
+                        indiceProxyPreferido = indiceProxy;
+                        return html;
+                    } catch (erro) {
+                        erros.push(erro?.message || String(erro));
+
+                        if (ehRateLimit(erro) && tentativa < CONFIGURACAO.TENTATIVAS_POR_PROXY_EM_429) {
+                            // Prefere o outro proxy na próxima disciplina, mas aguarda
+                            // antes de repetir esta mesma consulta.
+                            indiceProxyPreferido = (indiceProxy + 1) % CONFIGURACAO.PROXIES_CORS.length;
+                            await aplicarPausaPorRateLimit();
+                            continue;
+                        }
+
+                        // Erros que não são 429 não melhoram com nova tentativa no
+                        // mesmo proxy; passa para a alternativa.
+                        break;
                     }
-                    indiceProxyPreferido = indiceProxy;
-                    return html;
-                } catch (erro) {
-                    erros.push(erro?.message || String(erro));
                 }
             }
 
@@ -883,11 +922,17 @@
 
         async function buscarTextoComTimeout(url) {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), CONFIGURACAO.TIMEOUT_REQUISICAO);
+            const timeout = setTimeout(() => {
+                controller.abort(new DOMException('Tempo esgotado na consulta', 'TimeoutError'));
+            }, CONFIGURACAO.TIMEOUT_REQUISICAO);
 
             try {
                 const resposta = await fetch(url, { signal: controller.signal, cache: 'no-store' });
-                if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+                if (!resposta.ok) {
+                    const erroHttp = new Error(`HTTP ${resposta.status}`);
+                    erroHttp.status = resposta.status;
+                    throw erroHttp;
+                }
 
                 // O Júpiter ainda entrega algumas páginas em Windows-1252/ISO-8859-1.
                 // Escolhemos a decodificação que não introduz caracteres corrompidos.
@@ -895,6 +940,11 @@
                 const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
                 const latin1 = new TextDecoder('windows-1252', { fatal: false }).decode(bytes);
                 return pontuarCodificacao(latin1) < pontuarCodificacao(utf8) ? latin1 : utf8;
+            } catch (erro) {
+                if (controller.signal.aborted) {
+                    throw new Error('Tempo esgotado na consulta');
+                }
+                throw erro;
             } finally {
                 clearTimeout(timeout);
             }
