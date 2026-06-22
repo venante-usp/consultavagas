@@ -397,7 +397,7 @@
         <!-- Cabeçalho -->
         <div class="header">
             <h1>📚 Monitor de Vagas - PNV</h1>
-            <p class="header-subtitle">Monitoramento em tempo real de todas as disciplinas PNV disponíveis</p>
+            <p class="header-subtitle">Consulta de turmas e vagas por categoria no Júpiter. Dados em cache aparecem imediatamente; a primeira leitura é feita no Júpiter.</p>
             
             <div class="header-controls">
                 <div class="status-info">
@@ -447,7 +447,7 @@
 
         <!-- Rodapé -->
         <div class="rodape-info">
-            💡 Scan completo a cada 15 dias | Atualizações rápidas a cada 5 minutos | Funciona automaticamente 24/7
+            💡 Consulta acelerada com pool paralelo | Atualizações rápidas a cada 5 minutos | Dados salvos no navegador
         </div>
     </div>
 
@@ -457,7 +457,7 @@
          * - a lista de códigos está embutida, portanto não depende de codigos-pnv.json;
          * - erros e progresso aparecem na tela, sem spinner infinito;
          * - usa cache local imediatamente, quando disponível;
-         * - reduz o número de consultas paralelas e tenta mais de um proxy CORS;
+         * - usa um pool paralelo e um proxy de reserva com troca rápida;
          * - registra falhas no Console (F12) sem interromper o restante do scan.
          */
         const CONFIGURACAO = {
@@ -524,8 +524,10 @@
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000,
-            LIMITE_PARALELO: 5,
-            TIMEOUT_REQUISICAO: 10000,
+            // Pool de trabalhadores: começa a próxima disciplina assim que uma consulta termina.
+            LIMITE_PARALELO: 6,
+            TIMEOUT_REQUISICAO: 9000,
+            ATRASO_PROXY_RESERVA: 2500,
             PROXIES_CORS: [
                 url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
                 url => `https://corsproxy.io/?${encodeURIComponent(url)}`
@@ -546,23 +548,23 @@
                 };
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v3', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v3', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v5', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v5', JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar cache:', erro);
                 }
             }
 
             static async salvarAtualizacaoLeve(disciplinas) {
-                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v3') || '{}');
+                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v5') || '{}');
                 metadata.ultimaAtualizacaoLeve = Date.now();
                 metadata.timestamp = metadata.timestamp || Date.now();
                 metadata.quantidade = disciplinas.length;
                 metadata.tipo = metadata.tipo || 'cache';
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v3', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v3', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v5', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v5', JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar atualização:', erro);
                 }
@@ -570,7 +572,7 @@
 
             static async carregarDisciplinas() {
                 try {
-                    const dados = localStorage.getItem('pnv_disciplinas_v3');
+                    const dados = localStorage.getItem('pnv_disciplinas_v5');
                     return dados ? JSON.parse(dados) : null;
                 } catch (erro) {
                     console.error('Erro ao carregar cache:', erro);
@@ -580,7 +582,7 @@
 
             static async obterMetadata() {
                 try {
-                    const dados = localStorage.getItem('pnv_metadata_v3');
+                    const dados = localStorage.getItem('pnv_metadata_v5');
                     return dados ? JSON.parse(dados) : null;
                 } catch (erro) {
                     return null;
@@ -649,13 +651,13 @@
 
                 try {
                     const codigosPNV = CONFIGURACAO.CODIGOS_PNV;
-                    mostrarCarregando(`Preparando consulta de ${codigosPNV.length} disciplinas PNV...`);
+                    mostrarCarregando(`Consulta acelerada: preparando ${codigosPNV.length} disciplinas PNV...`);
                     atualizarContador('⏳ Iniciando consulta...');
 
                     const resultado = await buscarDisciplinasComLimite(codigosPNV, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
-                            mostrarCarregando(`Consultando disciplinas: ${concluidas}/${total}. Com turmas encontradas: ${encontradas}. Falhas: ${falhas}.`);
-                            atualizarContador(`⏳ ${concluidas}/${total} consultadas — ${encontradas} com turmas`);
+                            mostrarCarregando(`Consulta acelerada: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
+                            atualizarContador(`⚡ ${concluidas}/${total} consultadas — ${encontradas} com turmas`);
                         }
                     });
 
@@ -693,7 +695,7 @@
                     const codigos = todasDisciplinas.map(d => d.codigo);
                     const resultado = await buscarDisciplinasComLimite(codigos, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
-                            atualizarContador(`⏳ Atualizando ${concluidas}/${total} — falhas: ${falhas}`);
+                            atualizarContador(`⚡ Atualizando ${concluidas}/${total} — falhas: ${falhas}`);
                         }
                     });
 
@@ -727,55 +729,90 @@
             const disciplinas = [];
             let concluidas = 0;
             let falhas = 0;
+            let semTurma = 0;
+            let proximoIndice = 0;
 
-            for (let i = 0; i < codigos.length; i += CONFIGURACAO.LIMITE_PARALELO) {
-                const lote = codigos.slice(i, i + CONFIGURACAO.LIMITE_PARALELO);
-                const resultados = await Promise.allSettled(lote.map(buscarDetalhesDiscip));
+            // Ao contrário de lotes fixos, cada trabalhador pega a próxima disciplina
+            // logo que termina. Assim, uma resposta lenta não paralisa o restante.
+            const totalTrabalhadores = Math.min(CONFIGURACAO.LIMITE_PARALELO, codigos.length);
 
-                resultados.forEach(resultado => {
-                    concluidas += 1;
-                    if (resultado.status === 'fulfilled' && resultado.value) {
-                        disciplinas.push(resultado.value);
-                    } else {
+            async function trabalhador() {
+                while (true) {
+                    const indiceAtual = proximoIndice++;
+                    if (indiceAtual >= codigos.length) return;
+
+                    try {
+                        const disciplina = await buscarDetalhesDiscip(codigos[indiceAtual]);
+                        if (disciplina) {
+                            disciplinas.push(disciplina);
+                        } else {
+                            semTurma += 1;
+                        }
+                    } catch (erro) {
                         falhas += 1;
-                        if (resultado.status === 'rejected') console.error('Falha na consulta:', resultado.reason);
+                        console.warn('Falha na consulta:', erro);
+                    } finally {
+                        concluidas += 1;
+                        aoProgredir?.(concluidas, codigos.length, disciplinas.length, falhas, semTurma);
                     }
-                });
-
-                aoProgredir?.(concluidas, codigos.length, disciplinas.length, falhas);
-            }
-
-            return { disciplinas, falhas };
-        }
-
-        async function buscarDetalhesDiscip(codigoDiscip) {
-            const urlAlvo = CONFIGURACAO.URL_DETALHES_TURMA + encodeURIComponent(codigoDiscip);
-            let ultimoErro = null;
-
-            for (const montarUrlProxy of CONFIGURACAO.PROXIES_CORS) {
-                try {
-                    const html = await buscarTextoComTimeout(montarUrlProxy(urlAlvo));
-                    if (!html || html.length < 100) {
-                        throw new Error('Resposta vazia ou incompleta');
-                    }
-
-                    if (/Nenhum registro encontrado|nenhum registro/i.test(html)) return null;
-
-                    const turmas = extrairDetalhesTurmas(html);
-                    if (turmas.length === 0) return null;
-
-                    return {
-                        codigo: codigoDiscip,
-                        nome: extrairNomeDiscip(html, codigoDiscip),
-                        turmas
-                    };
-                } catch (erro) {
-                    ultimoErro = erro;
                 }
             }
 
-            console.warn(`Falha ao consultar ${codigoDiscip}:`, ultimoErro?.message || ultimoErro);
-            throw new Error(`${codigoDiscip}: ${ultimoErro?.message || 'não foi possível consultar o Júpiter'}`);
+            await Promise.all(Array.from({ length: totalTrabalhadores }, trabalhador));
+            return { disciplinas, falhas, semTurma };
+        }
+
+        let indiceProxyPreferido = 0;
+
+        async function buscarDetalhesDiscip(codigoDiscip) {
+            const urlAlvo = CONFIGURACAO.URL_DETALHES_TURMA + encodeURIComponent(codigoDiscip);
+            const ordem = [
+                indiceProxyPreferido,
+                ...CONFIGURACAO.PROXIES_CORS.map((_, indice) => indice).filter(indice => indice !== indiceProxyPreferido)
+            ];
+
+            try {
+                const html = await buscarPrimeiraRespostaValida(urlAlvo, ordem);
+                if (!html || html.length < 100) {
+                    throw new Error('Resposta vazia ou incompleta');
+                }
+
+                if (/Nenhum registro encontrado|nenhum registro/i.test(html)) return null;
+
+                const turmas = extrairDetalhesTurmas(html);
+                if (turmas.length === 0) return null;
+
+                return {
+                    codigo: codigoDiscip,
+                    nome: extrairNomeDiscip(html, codigoDiscip),
+                    turmas
+                };
+            } catch (erro) {
+                throw new Error(`${codigoDiscip}: ${erro?.message || 'não foi possível consultar o Júpiter'}`);
+            }
+        }
+
+        async function buscarPrimeiraRespostaValida(urlAlvo, ordem) {
+            const erros = [];
+
+            // Tenta um proxy por vez. A versão anterior consultava os dois ao mesmo
+            // tempo, dobrando a carga e provocando bloqueios/rate limit.
+            for (const indiceProxy of ordem) {
+                try {
+                    const urlProxy = CONFIGURACAO.PROXIES_CORS[indiceProxy](urlAlvo);
+                    const html = await buscarTextoComTimeout(urlProxy);
+                    if (!html || html.length < 100) throw new Error('Resposta vazia ou incompleta');
+                    if (!/Lista\s+de\s+Turmas|C[oó]digo\s+da\s+Turma|C digo\s+da\s+Turma/i.test(html)) {
+                        throw new Error('O proxy retornou uma página intermediária, não os dados do Júpiter');
+                    }
+                    indiceProxyPreferido = indiceProxy;
+                    return html;
+                } catch (erro) {
+                    erros.push(erro?.message || String(erro));
+                }
+            }
+
+            throw new Error(erros.join(' | ') || 'todos os proxies falharam');
         }
 
         async function buscarTextoComTimeout(url) {
@@ -783,96 +820,134 @@
             const timeout = setTimeout(() => controller.abort(), CONFIGURACAO.TIMEOUT_REQUISICAO);
 
             try {
-                const resposta = await fetch(url, {
-                    signal: controller.signal,
-                    cache: 'no-store'
-                });
+                const resposta = await fetch(url, { signal: controller.signal, cache: 'no-store' });
                 if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
-                return await resposta.text();
+
+                // O Júpiter ainda entrega algumas páginas em Windows-1252/ISO-8859-1.
+                // Escolhemos a decodificação que não introduz caracteres corrompidos.
+                const bytes = await resposta.arrayBuffer();
+                const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+                const latin1 = new TextDecoder('windows-1252', { fatal: false }).decode(bytes);
+                return pontuarCodificacao(latin1) < pontuarCodificacao(utf8) ? latin1 : utf8;
             } finally {
                 clearTimeout(timeout);
             }
+        }
+
+        function pontuarCodificacao(texto) {
+            return ((texto.match(/\uFFFD/g) || []).length * 20) + ((texto.match(/[ÃÂ]/g) || []).length * 2);
         }
 
         function normalizarTexto(valor) {
             return (valor || '').replace(/\s+/g, ' ').trim();
         }
 
+        function htmlParaTexto(html) {
+            // Remove scripts/iframes do Cloudflare e do botão de impressão antes
+            // de extrair o texto. Eles eram a origem das linhas "function...".
+            const semCodigo = String(html || '')
+                .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+                .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+                .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, ' ')
+                .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, ' ')
+                .replace(/<\/?(?:tr|p|div|li|h\d|table|br|td|th)[^>]*>/gi, '\n');
+
+            const doc = new DOMParser().parseFromString(semCodigo, 'text/html');
+            return normalizarTexto(doc.body?.textContent || '');
+        }
+
         function extrairNomeDiscip(html, codigo) {
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            const titulo = normalizarTexto(doc.querySelector('title')?.textContent);
-            const cabecalhos = Array.from(doc.querySelectorAll('h1,h2,h3,h4,strong,b')).map(el => normalizarTexto(el.textContent));
-            const candidato = cabecalhos.find(texto => texto.includes(codigo)) || titulo;
-            return candidato || 'Disciplina';
+            const texto = htmlParaTexto(html);
+            const padrao = new RegExp(`Disciplina\\s*:\\s*(${codigo}\\s*[-–]\\s*.*?)\\s*(?:Clique\\s+para|Lista\\s+de\\s+Turmas|$)`, 'i');
+            const encontrado = texto.match(padrao);
+            return normalizarTexto(encontrado?.[1] || `Disciplina ${codigo}`);
         }
 
         function extrairDetalhesTurmas(html) {
-            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const texto = htmlParaTexto(html);
+            const marcadorTurma = /C(?:[oó]| )digo\s+da\s+Turma\s*:\s*(\d+)/gi;
+            const ocorrencias = Array.from(texto.matchAll(marcadorTurma));
             const turmas = [];
             const vistos = new Set();
 
-            for (const tabela of doc.querySelectorAll('table')) {
-                const linhas = Array.from(tabela.querySelectorAll('tr'));
-                if (linhas.length < 2) continue;
+            for (let indice = 0; indice < ocorrencias.length; indice += 1) {
+                const inicio = ocorrencias[indice].index ?? 0;
+                const fim = indice + 1 < ocorrencias.length
+                    ? (ocorrencias[indice + 1].index ?? texto.length)
+                    : texto.length;
+                const bloco = texto.slice(inicio, fim);
+                const codigoTurma = ocorrencias[indice][1];
 
-                const cabecalho = Array.from(linhas[0].querySelectorAll('th,td')).map(celula => normalizarTexto(celula.textContent).toLowerCase());
-                const indiceTurma = encontrarIndice(cabecalho, /turma|c[oó]digo/);
-                const indiceHorario = encontrarIndice(cabecalho, /hor[aá]rio/);
-                const indiceDia = encontrarIndice(cabecalho, /dia/);
-                const indiceVagas = encontrarIndice(cabecalho, /vaga/);
+                // Ignora fragmentos que repetem a mesma turma em menus/impressão.
+                const cabecalhoVagas = bloco.search(/Vagas\s+Inscritos\s+Pendentes\s+Matriculados/i);
+                if (cabecalhoVagas < 0) continue;
 
-                for (const linha of linhas.slice(1)) {
-                    const celulas = Array.from(linha.querySelectorAll('td,th')).map(celula => normalizarTexto(celula.textContent));
-                    if (celulas.length === 0) continue;
+                const antesDasVagas = bloco.slice(0, cabecalhoVagas);
+                const horario = extrairHorario(antesDasVagas);
+                const categorias = extrairCategoriasDeVaga(bloco.slice(cabecalhoVagas));
 
-                    const textoLinha = normalizarTexto(celulas.join(' | '));
-                    const vagas = extrairVagas(textoLinha, indiceVagas >= 0 ? celulas[indiceVagas] : '');
-                    if (!vagas || vagas.total <= 0) continue;
+                for (const categoria of categorias) {
+                    const ocupadas = categoria.inscritos + categoria.pendentes + categoria.matriculados;
+                    const disponiveis = Math.max(0, categoria.vagas - ocupadas);
+                    const chave = `${codigoTurma}|${categoria.nome}|${categoria.vagas}|${categoria.inscritos}|${categoria.pendentes}|${categoria.matriculados}`;
+                    if (vistos.has(chave)) continue;
+                    vistos.add(chave);
 
-                    const codigo = indiceTurma >= 0 ? celulas[indiceTurma] : celulas[0];
-                    const horario = indiceHorario >= 0 ? celulas[indiceHorario] : buscarPorPadrao(celulas, /\d{1,2}:\d{2}/) || '--';
-                    const dia = indiceDia >= 0 ? celulas[indiceDia] : buscarPorPadrao(celulas, /segunda|terça|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo/i) || '--';
-                    const chave = `${codigo}|${dia}|${horario}|${vagas.ocupadas}|${vagas.total}`;
-
-                    if (!vistos.has(chave)) {
-                        vistos.add(chave);
-                        turmas.push({ codigo: codigo || '—', horario: horario || '—', dia: dia || '—', ...vagas });
-                    }
+                    turmas.push({
+                        codigo: codigoTurma,
+                        horario,
+                        dia: extrairDias(horario),
+                        categoria: categoria.nome,
+                        total: categoria.vagas,
+                        ocupadas,
+                        disponiveis,
+                        inscritos: categoria.inscritos,
+                        pendentes: categoria.pendentes,
+                        matriculados: categoria.matriculados
+                    });
                 }
             }
 
             return turmas;
         }
 
-        function encontrarIndice(cabecalhos, padrao) {
-            return cabecalhos.findIndex(cabecalho => padrao.test(cabecalho));
+        function extrairHorario(texto) {
+            const achado = texto.match(/Hor[aá]rio\s*(?:Prof\.?\(a\)\.?\s*)?(.*)$/i);
+            const bruto = normalizarTexto(achado?.[1] || '');
+            // Mantém apenas a parte até o primeiro nome; horários no Júpiter sempre
+            // contêm um dia abreviado e uma hora. Isto evita exibir os docentes como horário.
+            const limiteDocente = bruto.search(/\b(?:Vagas|Prof\.?\(a\)?)\b/i);
+            const base = limiteDocente >= 0 ? bruto.slice(0, limiteDocente) : bruto;
+            const horario = base.match(/(?:(?:seg|ter|qua|qui|sex|s[aá]b|dom)\s+\d{1,2}:\d{2}\s+\d{1,2}:\d{2}(?:\s*\([^)]*\))?\s*)+/i)?.[0];
+            return normalizarTexto(horario || base) || 'Horário não informado';
         }
 
-        function buscarPorPadrao(valores, padrao) {
-            return valores.find(valor => padrao.test(valor)) || '';
+        function extrairDias(horario) {
+            const dias = Array.from(String(horario).matchAll(/\b(seg|ter|qua|qui|sex|s[aá]b|dom)\b/gi)).map(item => item[1].toLowerCase());
+            return dias.length ? [...new Set(dias)].join(' / ') : '—';
         }
 
-        function extrairVagas(textoLinha, celulaVagas) {
-            const fontes = [celulaVagas, textoLinha].filter(Boolean);
-            for (const fonte of fontes) {
-                const relacao = fonte.match(/(\d+)\s*\/\s*(\d+)/);
-                if (relacao) return { ocupadas: Number(relacao[1]), total: Number(relacao[2]) };
-
-                const de = fonte.match(/(\d+)\s*(?:de|em)\s*(\d+)/i);
-                if (de) return { ocupadas: Number(de[1]), total: Number(de[2]) };
-
-                const total = fonte.match(/(?:total|vagas?)\s*[:=-]?\s*(\d+)/i);
-                const ocupadas = textoLinha.match(/(?:ocupadas?|inscritos?)\s*[:=-]?\s*(\d+)/i);
-                if (total && ocupadas) return { ocupadas: Number(ocupadas[1]), total: Number(total[1]) };
+        function extrairCategoriasDeVaga(texto) {
+            const categorias = [];
+            // Só lê as categorias principais. As linhas "EP - ..." logo abaixo
+            // são subquotas que repetem os mesmos números e não devem virar outra turma.
+            const regex = /\b(Obrigat(?:ória| ria)|Optativa\s+Eletiva|Optativa\s+Livre|Alunos\s+Especiais|Extracurricular|Qualquer\s+Unidade(?:\s+da\s+USP)?)\s+(\d+)\s+(\d+)\s+(-|\d+)\s+(\d+)/gi;
+            for (const encontrado of texto.matchAll(regex)) {
+                categorias.push({
+                    nome: normalizarTexto(encontrado[1]),
+                    vagas: Number(encontrado[2]),
+                    inscritos: Number(encontrado[3]),
+                    pendentes: encontrado[4] === '-' ? 0 : Number(encontrado[4]),
+                    matriculados: Number(encontrado[5])
+                });
             }
-            return null;
+            return categorias.filter(categoria => Number.isFinite(categoria.vagas) && categoria.vagas > 0);
         }
 
         function calcularStatus(turma) {
-            if (!turma.total) return 'desconhecido';
-            const ocupacao = turma.ocupadas / turma.total;
-            if (ocupacao >= 1) return 'lotado';
-            if (ocupacao >= 0.8) return 'poucos';
+            if (!turma.total || turma.disponiveis <= 0) return 'lotado';
+            const percentualLivre = turma.disponiveis / turma.total;
+            if (percentualLivre <= 0.2) return 'poucos';
             return 'disponivel';
         }
 
@@ -909,13 +984,14 @@
                     <div class="turmas">
                         ${disciplina.turmas.map(turma => {
                             const status = calcularStatus(turma);
-                            const percentual = turma.total ? Math.min(100, (turma.ocupadas / turma.total) * 100) : 0;
+                            const percentualOcupado = turma.total ? Math.min(100, (turma.ocupadas / turma.total) * 100) : 0;
                             return `
                                 <div class="item-turma">
-                                    <div class="horario-turma">${escaparHtml(turma.dia)} — ${escaparHtml(turma.horario)}</div>
-                                    <div class="codigo-turma">Turma: ${escaparHtml(turma.codigo)}</div>
-                                    <div class="barra-vagas"><div class="preenchimento ${status === 'poucos' ? 'poucos' : status === 'lotado' ? 'lotado' : ''}" style="width: ${percentual}%"></div></div>
-                                    <div class="info-vagas"><span>${turma.ocupadas} / ${turma.total} vagas</span><span>${Math.round(percentual)}%</span></div>
+                                    <div class="horario-turma">${escaparHtml(turma.horario)}</div>
+                                    <div class="codigo-turma">Turma ${escaparHtml(turma.codigo)} · ${escaparHtml(turma.categoria || 'Vagas')}</div>
+                                    <div class="barra-vagas"><div class="preenchimento ${status === 'poucos' ? 'poucos' : status === 'lotado' ? 'lotado' : ''}" style="width: ${percentualOcupado}%"></div></div>
+                                    <div class="info-vagas"><span><strong>${turma.disponiveis}</strong> disponíveis de ${turma.total}</span><span>${Math.round(percentualOcupado)}% ocupado</span></div>
+                                    <div class="codigo-turma">Inscritos: ${turma.inscritos} · Pendentes: ${turma.pendentes} · Matriculados: ${turma.matriculados}</div>
                                 </div>`;
                         }).join('')}
                     </div>
