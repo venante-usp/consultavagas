@@ -453,7 +453,7 @@
 
     <script>
         const CONFIGURACAO = {
-            URL_LISTA_PNV: 'https://uspdigital.usp.br/jupiterweb/jupDisciplinaLista?codcg=3&pfxdisval=PNV&tipo=D',
+            URL_CODIGOS_JSON: 'codigos-pnv.json',
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,    // 5 minutos
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000, // 15 dias
@@ -589,11 +589,11 @@
                 definirStatus('carregando');
 
                 try {
-                    // Extrair lista de códigos PNV da página do Jupiter
-                    const codigosPNV = await extrairCodigosPNV();
+                    // Carregar lista de códigos PNV do arquivo JSON
+                    const codigosPNV = await carregarCodigosPNV();
                     
                     if (!codigosPNV || codigosPNV.length === 0) {
-                        throw new Error('Nenhuma disciplina PNV encontrada');
+                        throw new Error('Nenhuma disciplina PNV encontrada no arquivo de configuração');
                     }
 
                     mostrarCarregando(`🔄 Escaneando ${codigosPNV.length} disciplinas PNV...`);
@@ -651,42 +651,23 @@
         }
 
         // ===== FUNÇÕES PRINCIPAIS =====
-        async function extrairCodigosPNV() {
+        async function carregarCodigosPNV() {
             try {
-                console.log('📋 Extraindo lista de disciplinas PNV...');
-                const url = CONFIGURACAO.PROXY_CORS + encodeURIComponent(CONFIGURACAO.URL_LISTA_PNV);
+                console.log('📋 Carregando lista de disciplinas PNV...');
+                const resposta = await fetch(CONFIGURACAO.URL_CODIGOS_JSON);
                 
-                const resposta = await fetch(url);
-                if (!resposta.ok) throw new Error('Erro ao acessar página do Jupiter');
+                if (!resposta.ok) {
+                    throw new Error('Arquivo codigos-pnv.json não encontrado');
+                }
                 
-                const html = await resposta.text();
-                const codigos = new Set();
-
-                // Procurar por padrões como: onclick="obterTurma('PNV1234')"
-                const regexDireto = /obterTurma\('(PNV\d{4})'\)/gi;
-                let match;
-                while ((match = regexDireto.exec(html)) !== null) {
-                    codigos.add(match[1]);
-                }
-
-                // Alternativa: procurar por links que apontam para detalhes de turma
-                const regexLink = /href="[^"]*\?sgldis=(PNV\d{4})[^"]*"/gi;
-                while ((match = regexLink.exec(html)) !== null) {
-                    codigos.add(match[1]);
-                }
-
-                // Alternativa: procurar em <a> ou <button> com PNV
-                const regexTexto = />(PNV\d{4})</gi;
-                while ((match = regexTexto.exec(html)) !== null) {
-                    codigos.add(match[1]);
-                }
-
-                const resultado = Array.from(codigos).sort();
-                console.log(`✅ Encontradas ${resultado.length} disciplinas PNV`);
-                return resultado;
+                const dados = await resposta.json();
+                const codigos = dados.codigos || [];
+                
+                console.log(`✅ Carregadas ${codigos.length} disciplinas PNV`);
+                return codigos;
             } catch (erro) {
-                console.error('Erro ao extrair códigos:', erro);
-                throw new Error('Falha ao extrair lista de disciplinas: ' + erro.message);
+                console.error('Erro ao carregar códigos:', erro);
+                throw new Error('Falha ao carregar lista de disciplinas: ' + erro.message);
             }
         }
 
