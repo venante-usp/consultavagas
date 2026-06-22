@@ -3,453 +3,284 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Monitor de Vagas - PNV</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+    <title>Monitor de Vagas - PNV</title>    <style>
+        :root {
+            --bg: #f4f7fb;
+            --surface: #ffffff;
+            --surface-soft: #f8fafc;
+            --ink: #122033;
+            --muted: #64748b;
+            --line: #e2e8f0;
+            --brand: #3155c6;
+            --brand-dark: #172554;
+            --brand-soft: #e8eeff;
+            --success: #16794a;
+            --warning: #b45309;
+            --danger: #c2410c;
+            --shadow: 0 12px 34px rgba(15, 23, 42, .09);
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
             min-height: 100vh;
-            padding: 20px;
-            color: #333;
+            padding: 28px;
+            color: var(--ink);
         }
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
+        .container { max-width: 1320px; margin: 0 auto; }
 
         .header {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            margin-bottom: 30px;
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
-        }
-
-        .header h1 {
-            color: #333;
-            margin-bottom: 5px;
-            font-size: 28px;
-        }
-
-        .header-subtitle {
-            color: #888;
-            font-size: 14px;
+            color: #fff;
+            background: radial-gradient(circle at top right, rgba(124, 150, 255, .34), transparent 36%), linear-gradient(135deg, #122247 0%, #1c3471 55%, #3155c6 100%);
+            padding: 28px;
+            border-radius: 22px;
             margin-bottom: 20px;
+            box-shadow: 0 16px 42px rgba(18, 34, 71, .22);
         }
 
-        .fonte-lista {
-            margin: 8px 0 0;
-            color: #666;
-            font-size: 12px;
-            line-height: 1.4;
-        }
-
-        .header-controls {
+        .header-top {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
+            align-items: flex-start;
+            gap: 22px;
         }
+
+        .eyebrow {
+            display: inline-block;
+            margin-bottom: 7px;
+            font-size: 11px;
+            line-height: 1;
+            font-weight: 750;
+            letter-spacing: .12em;
+            color: #b9c8ff;
+        }
+
+        .header h1 { font-size: clamp(25px, 3vw, 34px); letter-spacing: -.03em; line-height: 1.05; }
+        .header-subtitle { display: none; }
 
         .status-info {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 9px;
+            margin-top: 12px;
             font-size: 13px;
-            color: #666;
+            color: #dbe5ff;
         }
 
         .status-dot {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
-            background: #4CAF50;
+            background: #5ee39c;
+            box-shadow: 0 0 0 4px rgba(94, 227, 156, .16);
             animation: pulse 2s infinite;
             flex-shrink: 0;
         }
 
-        .status-dot.carregando {
-            background: #FFC107;
-        }
+        .status-dot.carregando { background: #ffd166; box-shadow: 0 0 0 4px rgba(255, 209, 102, .18); }
+        .status-dot.erro { background: #ff8a80; box-shadow: 0 0 0 4px rgba(255, 138, 128, .18); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 
-        .status-dot.erro {
-            background: #F44336;
-        }
+        .status-info strong { color: #fff; font-variant-numeric: tabular-nums; }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        .botoes-controle {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-        }
-
-        .explicacao-controles {
-            width: 100%;
-            margin-top: 2px;
-            font-size: 11px;
-            line-height: 1.35;
-            color: #777;
-            text-align: right;
-        }
-
-        .explicacao-controles strong {
-            color: #555;
-        }
+        .botoes-controle { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+        .explicacao-controles { display: none; }
 
         .btn {
-            padding: 10px 16px;
-            border: none;
-            border-radius: 6px;
+            min-height: 40px;
+            padding: 10px 14px;
+            border: 1px solid transparent;
+            border-radius: 10px;
             cursor: pointer;
             font-size: 13px;
-            font-weight: 600;
-            transition: all 0.3s;
+            font-weight: 720;
+            transition: transform .18s ease, background .18s ease, border-color .18s ease, opacity .18s ease;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            justify-content: center;
+            gap: 7px;
+            white-space: nowrap;
         }
 
-        .btn-atualizar {
-            background: #667eea;
-            color: white;
+        .btn:hover:not(:disabled) { transform: translateY(-1px); }
+        .btn-atualizar { color: #17315e; background: #fff; }
+        .btn-atualizar:hover:not(:disabled) { background: #edf2ff; }
+        .btn-atualizar-tudo { color: #fff; background: rgba(10, 24, 61, .34); border-color: rgba(255, 255, 255, .34); }
+        .btn-atualizar-tudo:hover:not(:disabled) { background: rgba(10, 24, 61, .56); }
+        .btn-atualizar:disabled, .btn-atualizar-tudo:disabled { opacity: .58; cursor: not-allowed; transform: none; }
+
+        .timer-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 11px;
+            margin-top: 24px;
         }
 
-        .btn-atualizar:hover:not(:disabled) {
-            background: #764ba2;
-            transform: translateY(-2px);
+        .timer-card {
+            min-height: 86px;
+            padding: 14px 15px;
+            border: 1px solid rgba(205, 218, 255, .25);
+            border-radius: 14px;
+            background: rgba(5, 17, 51, .20);
+            backdrop-filter: blur(4px);
         }
 
-        .btn-atualizar-tudo {
-            background: #455a64;
-            color: white;
+        .timer-label { display: block; color: #cbd7ff; font-size: 11px; font-weight: 650; letter-spacing: .02em; }
+        .timer-value { display: block; margin-top: 6px; color: #fff; font-size: 22px; line-height: 1; font-weight: 780; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+        .timer-detail { display: block; min-height: 15px; margin-top: 6px; color: #b9c8ff; font-size: 11px; }
+
+        .fonte-lista {
+            margin-top: 14px;
+            color: #cbd7ff;
+            font-size: 12px;
+            line-height: 1.35;
         }
 
-        .btn-atualizar-tudo:hover:not(:disabled) {
-            background: #263238;
-            transform: translateY(-2px);
-        }
-
-        .btn-atualizar:disabled,
-        .btn-atualizar-tudo:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            opacity: 0.6;
+        .contador-disciplinas {
+            display: flex;
+            align-items: center;
+            min-height: 48px;
+            padding: 13px 16px;
+            border: 1px solid #cfe0d4;
+            border-radius: 13px;
+            background: #f1fbf5;
+            color: #17623d;
+            margin-bottom: 14px;
+            font-weight: 720;
+            font-size: 14px;
+            box-shadow: 0 3px 10px rgba(22, 121, 74, .04);
         }
 
         .filtros {
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-        }
-
-        .filtros-titulo {
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 12px;
-            font-size: 14px;
-        }
-
-        .botoes-filtro {
             display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
+            align-items: center;
+            gap: 16px;
+            padding: 14px 16px;
+            border: 1px solid var(--line);
+            border-radius: 15px;
+            margin-bottom: 18px;
+            background: var(--surface);
+            box-shadow: 0 3px 12px rgba(15, 23, 42, .04);
         }
+
+        .filtros-titulo { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-weight: 740; }
+        .botoes-filtro { display: flex; gap: 8px; flex-wrap: wrap; }
 
         .btn-filtro {
-            padding: 8px 14px;
-            border: 2px solid #ddd;
-            background: white;
-            color: #666;
-            border-radius: 20px;
+            min-height: 34px;
+            padding: 7px 11px;
+            border: 1px solid var(--line);
+            background: #fff;
+            color: #526174;
+            border-radius: 9px;
             cursor: pointer;
-            font-size: 13px;
-            transition: all 0.3s;
-            font-weight: 500;
+            font-size: 12px;
+            transition: all .16s ease;
+            font-weight: 650;
         }
-
-        .btn-filtro:hover {
-            border-color: #667eea;
-        }
-
-        .btn-filtro.ativo {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
+        .btn-filtro:hover { border-color: #9fb2f7; color: var(--brand); }
+        .btn-filtro.ativo { background: var(--brand); color: #fff; border-color: var(--brand); }
 
         .alerta {
-            background: #ffebee;
-            border: 1px solid #F44336;
-            color: #C62828;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            margin-bottom: 16px;
+            padding: 13px 15px;
+            border: 1px solid #fecaca;
+            border-radius: 13px;
+            background: #fff7f7;
+            color: #9f1d1d;
             display: flex;
             gap: 10px;
             align-items: flex-start;
+            font-size: 13px;
         }
-
-        .alerta-icone {
-            flex-shrink: 0;
-            font-size: 18px;
-        }
+        .alerta-icone { flex-shrink: 0; font-size: 16px; }
 
         .grid-disciplinas {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-            gap: 20px;
+            gap: 16px;
         }
 
         .carta-disciplina {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-            transition: all 0.3s;
-            border-left: 5px solid #667eea;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 18px;
+            background: var(--surface);
+            box-shadow: 0 6px 18px rgba(15, 23, 42, .055);
+            transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
         }
+        .carta-disciplina:hover { transform: translateY(-2px); border-color: #c8d5f7; box-shadow: var(--shadow); }
 
-        .carta-disciplina:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
-        }
-
-        .carta-disciplina.lotado {
-            border-left-color: #F44336;
-        }
-
-        .carta-disciplina.poucos {
-            border-left-color: #FFC107;
-        }
-
-        .carta-disciplina.disponivel {
-            border-left-color: #4CAF50;
-        }
-
-        .cabecalho-disciplina {
-            border-bottom: 2px solid #f0f0f0;
-            padding-bottom: 12px;
-            margin-bottom: 12px;
-        }
-
-        .codigo-disciplina {
-            font-weight: 700;
-            font-size: 18px;
-            color: #333;
-        }
-
-        .nome-disciplina {
-            font-size: 12px;
-            color: #888;
-            margin-top: 4px;
-            word-break: break-word;
-        }
+        .cabecalho-disciplina { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+        .codigo-disciplina { color: var(--brand-dark); font-size: 17px; line-height: 1.15; font-weight: 800; letter-spacing: -.01em; }
+        .nome-disciplina { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.35; word-break: break-word; }
 
         .resumo-pessoas {
-            margin-top: 12px;
-            padding: 10px 12px;
-            border-radius: 7px;
-            background: #eef3ff;
-            border: 1px solid #d7e2ff;
-            color: #334;
-        }
-
-        .resumo-pessoas-linha-principal {
             display: flex;
-            align-items: baseline;
+            align-items: center;
             justify-content: space-between;
-            gap: 10px;
-            font-size: 13px;
+            gap: 12px;
+            margin-top: 13px;
+            padding: 10px 11px;
+            border: 1px solid #dbe5ff;
+            border-radius: 11px;
+            background: var(--brand-soft);
+            color: #30415f;
         }
+        .resumo-pessoas-linha-principal { display: contents; }
+        .resumo-pessoas-linha-principal span { color: #526788; font-size: 11px; font-weight: 720; }
+        .resumo-pessoas-linha-principal strong { color: #1f44b4; font-size: 22px; line-height: 1; font-weight: 820; font-variant-numeric: tabular-nums; }
+        .resumo-pessoas-detalhe { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
-        .resumo-pessoas-linha-principal strong {
-            font-size: 18px;
-            color: #4c63c7;
-            white-space: nowrap;
-        }
+        .turmas { display: flex; flex-direction: column; gap: 9px; }
+        .item-turma { padding: 12px; border: 1px solid #e9eef5; border-radius: 12px; background: var(--surface-soft); }
+        .horario-turma { color: var(--ink); font-size: 13px; font-weight: 760; }
+        .codigo-turma { margin-top: 4px; color: #718096; font-size: 11px; line-height: 1.35; }
 
-        .resumo-pessoas-detalhe {
-            margin-top: 4px;
-            color: #667;
-            font-size: 11px;
-        }
+        .barra-vagas { width: 100%; height: 7px; margin: 10px 0 7px; overflow: hidden; border-radius: 999px; background: #e7edf4; }
+        .preenchimento { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #1ea66a, #61c48d); transition: width .25s ease; }
+        .preenchimento.poucos { background: linear-gradient(90deg, #ef9d22, #f6bd57); }
+        .preenchimento.lotado { background: linear-gradient(90deg, #e15d50, #f08a7d); }
 
-        .turmas {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
+        .info-vagas { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: #5d6b7e; font-size: 11px; }
+        .info-vagas strong { color: var(--ink); font-size: 13px; }
 
-        .item-turma {
-            background: #fafafa;
-            padding: 12px;
-            border-radius: 6px;
-            border-left: 3px solid #667eea;
-        }
-
-        .horario-turma {
-            font-weight: 600;
-            color: #333;
-            font-size: 13px;
-            margin-bottom: 6px;
-        }
-
-        .codigo-turma {
-            font-size: 12px;
-            color: #888;
-            margin-bottom: 8px;
-        }
-
-        .barra-vagas {
-            width: 100%;
-            height: 8px;
-            background: #e0e0e0;
-            border-radius: 4px;
-            overflow: hidden;
-            margin-bottom: 6px;
-        }
-
-        .preenchimento {
-            height: 100%;
-            background: linear-gradient(90deg, #4CAF50, #8BC34A);
-            transition: width 0.3s ease;
-        }
-
-        .preenchimento.poucos {
-            background: linear-gradient(90deg, #FFC107, #FF9800);
-        }
-
-        .preenchimento.lotado {
-            background: #F44336;
-        }
-
-        .info-vagas {
-            display: flex;
-            justify-content: space-between;
-            font-size: 12px;
-            color: #666;
-        }
-
-        .sem-resultados {
-            background: white;
-            padding: 50px 20px;
-            border-radius: 10px;
+        .sem-resultados, .carregando {
+            padding: 48px 20px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fff;
             text-align: center;
-            color: #888;
-            font-size: 16px;
-        }
-
-        .carregando {
-            background: white;
-            padding: 50px 20px;
-            border-radius: 10px;
-            text-align: center;
-        }
-
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: girar 1s linear infinite;
-            margin: 0 auto 15px;
-        }
-
-        @keyframes girar {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .texto-carregando {
-            color: #666;
-            font-weight: 500;
-        }
-
-        .rodape-info {
-            text-align: center;
-            margin-top: 30px;
-            padding: 20px;
-            color: #999;
-            font-size: 12px;
-        }
-
-        .contador-disciplinas {
-            background: #e8f5e9;
-            border: 1px solid #4CAF50;
-            color: #2e7d32;
-            padding: 12px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            text-align: center;
-            font-weight: 500;
+            color: var(--muted);
             font-size: 14px;
         }
+        .spinner { width: 34px; height: 34px; margin: 0 auto 12px; border: 3px solid #dce5f7; border-top-color: var(--brand); border-radius: 50%; animation: girar 1s linear infinite; }
+        @keyframes girar { to { transform: rotate(360deg); } }
+        .texto-carregando { font-weight: 650; }
 
-        @media (max-width: 768px) {
-            .header h1 {
-                font-size: 24px;
-            }
+        .rodape-info { margin: 20px 0 4px; color: #94a3b8; text-align: center; font-size: 11px; }
 
-            .header-controls {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-
-            .status-info {
-                width: 100%;
-            }
-
-            .grid-disciplinas {
-                grid-template-columns: 1fr;
-            }
-
-            .botoes-controle {
-                width: 100%;
-            }
-
-            .btn {
-                flex: 1;
-                justify-content: center;
-            }
+        @media (max-width: 780px) {
+            body { padding: 14px; }
+            .header { padding: 21px; border-radius: 17px; }
+            .header-top { flex-direction: column; }
+            .botoes-controle { width: 100%; justify-content: stretch; }
+            .btn { flex: 1 1 210px; }
+            .timer-grid { grid-template-columns: 1fr; }
+            .timer-card { min-height: 70px; }
+            .filtros { align-items: flex-start; flex-direction: column; gap: 10px; }
+            .grid-disciplinas { grid-template-columns: 1fr; }
         }
 
-        @media (max-width: 480px) {
-            body {
-                padding: 10px;
-            }
-
-            .header {
-                padding: 20px;
-            }
-
-            .header h1 {
-                font-size: 20px;
-            }
-
-            .botoes-filtro {
-                gap: 6px;
-            }
-
-            .btn-filtro {
-                padding: 6px 10px;
-                font-size: 12px;
-            }
+        @media (max-width: 450px) {
+            .header h1 { font-size: 26px; }
+            .btn { width: 100%; }
+            .botoes-filtro { width: 100%; }
+            .btn-filtro { flex: 1 1 135px; }
         }
     </style>
 </head>
@@ -457,35 +288,46 @@
     <div class="container">
         <!-- Cabeçalho -->
         <div class="header">
-            <h1>📚 Monitor de Vagas - PNV</h1>
-            <p class="header-subtitle">Consulta de turmas e vagas por categoria no Júpiter. A consulta completa também confere a lista atual de disciplinas PNV antes de buscar as turmas. Modo confiável: consultas espaçadas para reduzir omissões.</p>
-            <div class="fonte-lista" id="fonteLista">📋 Lista de disciplinas: ainda não sincronizada com o Júpiter.</div>
-            
-            <div class="header-controls">
-                <div class="status-info">
-                    <div class="status-dot" id="indicadorStatus"></div>
-                    <div>
-                        <div>Última atualização: <strong id="ultimaAtualizacao">--:--:--</strong></div>
-                        <div id="proximaAtualizacaoInfo">Próxima em: <strong id="proximaAtualizacao">--</strong></div>
+            <div class="header-top">
+                <div>
+                    <div class="eyebrow">JÚPITER · PNV</div>
+                    <h1>Monitor de vagas</h1>
+                    <div class="status-info" aria-live="polite">
+                        <div class="status-dot" id="indicadorStatus"></div>
+                        <span id="textoStatus">Monitor ativo</span>
+                        <span>· Atualizado <strong id="ultimaAtualizacao">--:--:--</strong></span>
                     </div>
                 </div>
                 <div class="botoes-controle">
                     <button class="btn btn-atualizar" id="botaoAtualizar" onclick="forcarAtualizacao()"
-                            title="Consulta novamente somente as disciplinas que já estão exibidas na página."
-                            aria-label="Atualizar somente as disciplinas exibidas">
-                        🔄 Atualizar disciplinas exibidas
+                            title="Consulta novamente somente as disciplinas que já estão exibidas.">
+                        ↻ Atualizar exibidas
                     </button>
                     <button class="btn btn-atualizar-tudo" id="botaoAtualizarTudo" onclick="forcarAtualizacaoTotal()"
-                            title="Consulta a lista atual de códigos PNV no Júpiter e, em seguida, consulta as turmas de cada disciplina encontrada."
-                            aria-label="Consultar lista atual de disciplinas PNV no Júpiter">
-                        🔁 Consultar lista atual do Júpiter
+                            title="Lê a lista atual PNV no Júpiter e refaz a consulta completa.">
+                        ↻ Sincronizar lista PNV
                     </button>
-                    <div class="explicacao-controles">
-                        <strong>Atualizar disciplinas exibidas:</strong> consulta só o que já aparece abaixo. 
-                        <strong>Consultar lista atual do Júpiter:</strong> primeiro confere os códigos PNV atualmente listados pelo Júpiter e depois refaz a busca completa; disciplinas removidas da lista deixam de aparecer.
-                    </div>
                 </div>
             </div>
+
+            <div class="timer-grid" aria-label="Horários e próximas consultas">
+                <div class="timer-card">
+                    <span class="timer-label">AGORA</span>
+                    <strong class="timer-value" id="relogioAtual">--:--:--</strong>
+                    <small class="timer-detail">horário local</small>
+                </div>
+                <div class="timer-card">
+                    <span class="timer-label">ATUALIZAÇÃO CURTA</span>
+                    <strong class="timer-value" id="proximaAtualizacaoCurta">--</strong>
+                    <small class="timer-detail">disciplinas exibidas</small>
+                </div>
+                <div class="timer-card">
+                    <span class="timer-label">CONSULTA COMPLETA</span>
+                    <strong class="timer-value" id="proximaConsultaCompleta">--</strong>
+                    <small class="timer-detail">lista atual do Júpiter</small>
+                </div>
+            </div>
+            <div class="fonte-lista" id="fonteLista">Lista PNV ainda não sincronizada.</div>
         </div>
 
         <!-- Contador de disciplinas -->
@@ -519,9 +361,7 @@
         <div id="conteudo"></div>
 
         <!-- Rodapé -->
-        <div class="rodape-info">
-            💡 Atualização das disciplinas exibidas a cada 5 minutos | Lista oficial e consulta completa a cada 15 dias | Dados salvos no navegador
-        </div>
+        <div class="rodape-info">Dados locais · fonte: Júpiter</div>
     </div>
 
         <script>
@@ -689,10 +529,8 @@
             static async deveFazerScanCompleto() {
                 const metadata = await this.obterMetadata();
                 if (!metadata || !metadata.timestamp) return true;
-                // Uma versão anterior pode ter classificado respostas instáveis como
-                // “sem oferta”. Ela é exibida apenas enquanto a nova consulta começa,
-                // mas sempre força uma sincronização completa uma vez.
-                if (metadata.legado) return true;
+                // Um cache de versão anterior não contém a lista oficial: faz uma
+                // sincronização completa uma vez, para permitir entradas e saídas.
                 if (!Array.isArray(metadata.codigosOficiais) || metadata.codigosOficiais.length === 0) return true;
                 return Date.now() - metadata.timestamp >= CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
             }
@@ -978,8 +816,8 @@
 
         function htmlPareceSerDaDisciplina(html, codigoDiscip) {
             const texto = htmlParaTexto(html);
-            const codigoSeguro = String(codigoDiscip).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const temCodigo = new RegExp(`\\b${codigoSeguro}\\b`, 'i').test(texto);
+            const codigoSeguro = String(codigoDiscip).replace(/[.*+?^${}()|[\]\\]/g, '\$&');
+            const temCodigo = new RegExp(`\b${codigoSeguro}\b`, 'i').test(texto);
             const temCabecalho = /Disciplina\s*:/i.test(texto);
             const temContextoDoJupiter = /Lista\s+de\s+Turmas|Clique\s+para\s+consultar/i.test(texto);
 
@@ -1404,37 +1242,52 @@
             const quantidade = Array.isArray(listaInfo?.codigos) ? listaInfo.codigos.length : 0;
             const quando = listaInfo?.atualizadaEm
                 ? new Date(listaInfo.atualizadaEm).toLocaleString('pt-BR')
-                : 'data não disponível';
-            const marcador = listaInfo?.fallback ? '⚠️' : '📋';
-            const origem = listaInfo?.origem || 'lista não informada';
-            alvo.textContent = `${marcador} Lista de disciplinas: ${quantidade} código(s) — ${origem} (${quando}).`;
+                : 'sem data';
+            const origem = listaInfo?.fallback ? 'lista de reserva' : 'lista do Júpiter';
+            alvo.textContent = `${quantidade} códigos PNV · ${origem} · sincronizada em ${quando}`;
+        }
+
+        function formatarDuracao(milisegundos) {
+            if (!Number.isFinite(milisegundos) || milisegundos <= 0) return 'agora';
+
+            const totalSegundos = Math.ceil(milisegundos / 1000);
+            const dias = Math.floor(totalSegundos / 86400);
+            const horas = Math.floor((totalSegundos % 86400) / 3600);
+            const minutos = Math.floor((totalSegundos % 3600) / 60);
+            const segundos = totalSegundos % 60;
+
+            if (dias > 0) return horas > 0 ? `${dias}d ${horas}h` : `${dias}d`;
+            if (horas > 0) return minutos > 0 ? `${horas}h ${minutos}m` : `${horas}h`;
+            if (minutos > 0) return `${minutos}m ${String(segundos).padStart(2, '0')}s`;
+            return `${segundos}s`;
+        }
+
+        async function atualizarPainelTempo() {
+            const [tempoCurta, tempoCompleta] = await Promise.all([
+                CacheManager.tempoAteProximaAtualizacao(),
+                CacheManager.tempoAteProximoScan()
+            ]);
+
+            const agora = new Date();
+            const relogio = document.getElementById('relogioAtual');
+            const curta = document.getElementById('proximaAtualizacaoCurta');
+            const completa = document.getElementById('proximaConsultaCompleta');
+
+            if (relogio) relogio.textContent = agora.toLocaleTimeString('pt-BR');
+            if (curta) curta.textContent = SistemaFundo.executando.atualizacaoLeve ? 'em andamento' : formatarDuracao(tempoCurta);
+            if (completa) completa.textContent = SistemaFundo.executando.scanCompleto ? 'em andamento' : formatarDuracao(tempoCompleta);
         }
 
         function iniciarContagemRegressiva() {
-            setInterval(async () => {
-                const tempoProxAtu = await CacheManager.tempoAteProximaAtualizacao();
-                const tempoProxScan = await CacheManager.tempoAteProximoScan();
-                const alvo = document.getElementById('proximaAtualizacao');
-
-                if (tempoProxAtu > 0) {
-                    const minutos = Math.floor(tempoProxAtu / 60000);
-                    const segundos = Math.floor((tempoProxAtu % 60000) / 1000);
-                    alvo.textContent = minutos > 0 ? `${minutos}m ${segundos}s (atualização)` : `${segundos}s (atualização)`;
-                } else if (tempoProxScan > 0) {
-                    const dias = Math.floor(tempoProxScan / 86400000);
-                    const horas = Math.floor((tempoProxScan % 86400000) / 3600000);
-                    alvo.textContent = `${dias}d ${horas}h (scan)`;
-                } else {
-                    alvo.textContent = 'agora';
-                }
-            }, 1000);
+            atualizarPainelTempo();
+            setInterval(atualizarPainelTempo, 1000);
         }
 
         function consultasEmAndamento() {
             return SistemaFundo.executando.scanCompleto || SistemaFundo.executando.atualizacaoLeve;
         }
 
-        function definirBotoesAtualizacao(desabilitados, textoAtualizar = '🔄 Atualizar disciplinas exibidas', textoTudo = '🔁 Consultar lista atual do Júpiter') {
+        function definirBotoesAtualizacao(desabilitados, textoAtualizar = '↻ Atualizar exibidas', textoTudo = '↻ Sincronizar lista PNV') {
             const botaoAtualizar = document.getElementById('botaoAtualizar');
             const botaoAtualizarTudo = document.getElementById('botaoAtualizarTudo');
 
@@ -1447,7 +1300,7 @@
         async function forcarAtualizacao() {
             if (consultasEmAndamento()) return;
 
-            definirBotoesAtualizacao(true, '⏳ Atualizando exibidas...', '🔁 Consultar lista atual do Júpiter');
+            definirBotoesAtualizacao(true, '⏳ Atualizando...', '↻ Sincronizar lista PNV');
             try {
                 if (todasDisciplinas.length === 0) {
                     await SistemaFundo.executarScanCompleto();
@@ -1462,7 +1315,7 @@
         async function forcarAtualizacaoTotal() {
             if (consultasEmAndamento()) return;
 
-            definirBotoesAtualizacao(true, '🔄 Atualizar disciplinas exibidas', '⏳ Conferindo lista atual...');
+            definirBotoesAtualizacao(true, '↻ Atualizar exibidas', '⏳ Sincronizando...');
             try {
                 // Primeiro lê a lista atual no Júpiter e, em seguida, consulta as
                 // turmas de cada código. Entradas removidas deixam de aparecer.
@@ -1474,9 +1327,18 @@
 
         function definirStatus(status) {
             const indicador = document.getElementById('indicadorStatus');
+            const texto = document.getElementById('textoStatus');
             indicador.className = 'status-dot';
-            if (status === 'carregando') indicador.classList.add('carregando');
-            if (status === 'erro') indicador.classList.add('erro');
+
+            if (status === 'carregando') {
+                indicador.classList.add('carregando');
+                if (texto) texto.textContent = 'Consultando dados';
+            } else if (status === 'erro') {
+                indicador.classList.add('erro');
+                if (texto) texto.textContent = 'Falha temporária';
+            } else if (texto) {
+                texto.textContent = 'Monitor ativo';
+            }
         }
 
         function atualizarUltimaAtualizacao() {
@@ -1484,7 +1346,8 @@
         }
 
         function atualizarContador(mensagem) {
-            document.getElementById('contadorDisciplinas').innerHTML = mensagem || `✅ ${todasDisciplinas.length} disciplina(s) com turma(s) encontrada(s)`;
+            const alvo = document.getElementById('contadorDisciplinas');
+            alvo.textContent = mensagem || `${todasDisciplinas.length} disciplina(s) com turma(s) exibida(s)`;
         }
 
         function mostrarAlerta(mensagem) {
