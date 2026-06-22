@@ -555,7 +555,7 @@
             "PNV3315",
             "PNV3416",
             "PNV3646",
-            "PNV1120",
+            "PNV1220",
             "PNV3210",
             "PNV3426",
             "PNV3100",
@@ -599,13 +599,14 @@
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000,
-            // Até três consultas em paralelo. Os inícios são espaçados para
-            // ganhar velocidade sem reproduzir o bloqueio HTTP 429 da versão anterior.
-            LIMITE_PARALELO: 3,
-            INTERVALO_ENTRE_CONSULTAS: 550,
-            PAUSA_APOS_RATE_LIMIT: 30000,
+            // Modo rápido: até seis consultas simultâneas, distribuídas entre
+            // os proxies e com inícios levemente espaçados. Se houver HTTP 429,
+            // a página reduz o ritmo com uma pausa global antes da tentativa seguinte.
+            LIMITE_PARALELO: 6,
+            INTERVALO_ENTRE_CONSULTAS: 180,
+            PAUSA_APOS_RATE_LIMIT: 10000,
             TENTATIVAS_POR_PROXY_EM_429: 2,
-            TIMEOUT_REQUISICAO: 15000,
+            TIMEOUT_REQUISICAO: 8000,
             PROXIES_CORS: [
                 url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
                 url => `https://corsproxy.io/?${encodeURIComponent(url)}`
@@ -617,10 +618,10 @@
         let proximoUpdate = 0;
 
         class CacheManager {
-            static CHAVE_DISCIPLINAS = 'pnv_disciplinas_v11';
-            static CHAVE_METADATA = 'pnv_metadata_v11';
-            static CHAVE_DISCIPLINAS_ANTIGA = 'pnv_disciplinas_v10';
-            static CHAVE_METADATA_ANTIGA = 'pnv_metadata_v10';
+            static CHAVE_DISCIPLINAS = 'pnv_disciplinas_v12';
+            static CHAVE_METADATA = 'pnv_metadata_v12';
+            static CHAVE_DISCIPLINAS_ANTIGA = 'pnv_disciplinas_v11';
+            static CHAVE_METADATA_ANTIGA = 'pnv_metadata_v11';
 
             static lerJson(chave) {
                 try {
@@ -781,22 +782,26 @@
                     atualizarInfoLista(listaInfo);
                     if (listaInfo.aviso) avisos.push(listaInfo.aviso);
 
-                    mostrarCarregando(`Consulta em paralelo: preparando ${codigosPNV.length} disciplinas da lista atual...`);
+                    mostrarCarregando(`Consulta rápida: preparando ${codigosPNV.length} disciplinas da lista atual...`);
                     atualizarContador(`⏳ Lista atual: ${codigosPNV.length} códigos PNV. Iniciando consulta de turmas...`);
 
                     const resultado = await buscarDisciplinasComLimite(codigosPNV, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
-                            mostrarCarregando(`Consulta em paralelo: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
+                            mostrarCarregando(`Consulta rápida: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
                             atualizarContador(`⚡ ${concluidas}/${total} disciplinas consultadas — ${encontradas} com turmas`);
                         }
                     });
 
-                    // Removidas da lista oficial: não permanecem no monitor. Se uma
-                    // disciplina ainda listada falhar, os últimos dados dela são preservados.
+                    // Disciplinas sem turma ofertada deixam o monitor. Somente falhas
+                    // reais de consulta preservam o último dado salvo, para não apagar
+                    // uma disciplina apenas por instabilidade temporária do proxy.
                     const codigosAtuais = new Set(codigosPNV);
                     const atualizadasPorCodigo = new Map(resultado.disciplinas.map(disciplina => [disciplina.codigo, disciplina]));
+                    const codigosComFalha = new Set(resultado.falhasCodigos || []);
                     const preservadas = todasDisciplinas.filter(disciplina =>
-                        codigosAtuais.has(disciplina.codigo) && !atualizadasPorCodigo.has(disciplina.codigo)
+                        codigosAtuais.has(disciplina.codigo) &&
+                        codigosComFalha.has(disciplina.codigo) &&
+                        !atualizadasPorCodigo.has(disciplina.codigo)
                     );
                     todasDisciplinas = [
                         ...resultado.disciplinas.filter(d => d.turmas && d.turmas.length > 0),
@@ -840,12 +845,15 @@
                         }
                     });
 
-                    resultado.disciplinas.forEach(atualizada => {
-                        const indice = todasDisciplinas.findIndex(d => d.codigo === atualizada.codigo);
-                        if (indice >= 0) {
-                            todasDisciplinas[indice] = atualizada;
-                        }
-                    });
+                    const atualizadasPorCodigo = new Map(resultado.disciplinas.map(disciplina => [disciplina.codigo, disciplina]));
+                    const semTurma = new Set(resultado.semTurmaCodigos || []);
+
+                    // A atualização curta também remove uma disciplina que foi
+                    // consultada com sucesso, mas não possui turma ofertada agora.
+                    // Falhas reais continuam com o último dado visível.
+                    todasDisciplinas = todasDisciplinas
+                        .filter(disciplina => !semTurma.has(disciplina.codigo))
+                        .map(disciplina => atualizadasPorCodigo.get(disciplina.codigo) || disciplina);
 
                     await CacheManager.salvarAtualizacaoLeve(todasDisciplinas);
                     atualizarUltimaAtualizacao();
@@ -868,30 +876,37 @@
 
         async function buscarDisciplinasComLimite(codigos, { aoProgredir } = {}) {
             const disciplinas = [];
+            const semTurmaCodigos = [];
+            const falhasCodigos = [];
             let concluidas = 0;
             let falhas = 0;
             let semTurma = 0;
             let proximoIndice = 0;
 
-            // Ao contrário de lotes fixos, cada trabalhador pega a próxima disciplina
-            // logo que termina. Assim, uma resposta lenta não paralisa o restante.
+            // Cada trabalhador recebe a próxima disciplina assim que termina.
+            // Com seis trabalhadores, a consulta completa fica bem mais ágil sem
+            // criar um pico de dezenas de requisições de uma vez.
             const totalTrabalhadores = Math.min(CONFIGURACAO.LIMITE_PARALELO, codigos.length);
 
             async function trabalhador() {
                 while (true) {
                     const indiceAtual = proximoIndice++;
                     if (indiceAtual >= codigos.length) return;
+                    const codigo = codigos[indiceAtual];
 
                     try {
-                        const disciplina = await buscarDetalhesDiscip(codigos[indiceAtual]);
+                        const disciplina = await buscarDetalhesDiscip(codigo);
                         if (disciplina) {
                             disciplinas.push(disciplina);
                         } else {
+                            // Não ter turma ofertada agora é normal, não é falha.
                             semTurma += 1;
+                            semTurmaCodigos.push(codigo);
                         }
                     } catch (erro) {
                         falhas += 1;
-                        console.warn('Falha na consulta:', erro);
+                        falhasCodigos.push(codigo);
+                        console.warn('Falha real na consulta:', erro);
                     } finally {
                         concluidas += 1;
                         aoProgredir?.(concluidas, codigos.length, disciplinas.length, falhas, semTurma);
@@ -900,7 +915,7 @@
             }
 
             await Promise.all(Array.from({ length: totalTrabalhadores }, trabalhador));
-            return { disciplinas, falhas, semTurma };
+            return { disciplinas, falhas, semTurma, semTurmaCodigos, falhasCodigos };
         }
 
         let indiceProxyPreferido = 0;
@@ -912,10 +927,8 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
-        // Serializa somente o *início* das requisições. Depois de iniciadas, até
-        // LIMITE_PARALELO respostas podem estar em trânsito simultaneamente.
-        // Isso é bem mais rápido que processar uma disciplina inteira por vez,
-        // mas evita picos de dezenas de requisições que provocam HTTP 429.
+        // Serializa somente o início das requisições. Depois de iniciadas, até
+        // LIMITE_PARALELO respostas ficam em trânsito simultaneamente.
         async function aguardarJanelaDeConsulta() {
             const minhaVez = filaDeInicioDeConsultas.then(async () => {
                 const agora = Date.now();
@@ -925,7 +938,6 @@
                 proximaConsultaPermitida = Date.now() + CONFIGURACAO.INTERVALO_ENTRE_CONSULTAS;
             });
 
-            // Uma falha em uma consulta nunca deve bloquear a fila das próximas.
             filaDeInicioDeConsultas = minhaVez.catch(() => {});
             return minhaVez;
         }
@@ -938,13 +950,37 @@
             const ate = Date.now() + CONFIGURACAO.PAUSA_APOS_RATE_LIMIT;
             pausaGlobalAte = Math.max(pausaGlobalAte, ate);
             proximaConsultaPermitida = Math.max(proximaConsultaPermitida, pausaGlobalAte);
-            atualizarContador(`⏸️ Limite de consultas detectado. Tentando novamente em ${Math.ceil(Math.max(0, pausaGlobalAte - Date.now()) / 1000)} s...`);
+            atualizarContador(`⏸️ Limite de consultas detectado. Retomando em ${Math.ceil(Math.max(0, pausaGlobalAte - Date.now()) / 1000)} s...`);
             await esperar(Math.max(0, pausaGlobalAte - Date.now()));
         }
 
+        function indiceHash(texto) {
+            let valor = 0;
+            for (const caractere of String(texto || '')) {
+                valor = ((valor << 5) - valor + caractere.charCodeAt(0)) | 0;
+            }
+            return Math.abs(valor);
+        }
+
+        // Alterna o proxy inicial por código. Antes, todas as disciplinas usavam
+        // o último proxy bem-sucedido e concentravam o rate limit em um serviço só.
+        function ordemProxiesPara(chave) {
+            const quantidade = CONFIGURACAO.PROXIES_CORS.length;
+            const inicio = quantidade ? indiceHash(chave) % quantidade : 0;
+            return Array.from({ length: quantidade }, (_, deslocamento) => (inicio + deslocamento) % quantidade);
+        }
+
+        function htmlContemTurmas(html) {
+            return /C[oó]digo\s+da\s+Turma|C digo\s+da\s+Turma/i.test(String(html || ''));
+        }
+
+        function htmlPareceSerDaDisciplina(html, codigoDiscip) {
+            const texto = htmlParaTexto(html);
+            return new RegExp(`\\b${String(codigoDiscip).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(texto) ||
+                   /Disciplina\s*:/i.test(texto);
+        }
+
         function extrairCodigosDaListaOficial(html) {
-            // A página lista cada disciplina com sua sigla. O Set preserva a ordem
-            // original e elimina repetições causadas por links e cabeçalhos.
             const texto = htmlParaTexto(html);
             const codigos = Array.from(texto.matchAll(/\bPNV\s*(\d{4})\b/gi), item => `PNV${item[1]}`);
             return [...new Set(codigos)];
@@ -974,39 +1010,68 @@
 
         async function buscarDetalhesDiscip(codigoDiscip) {
             const urlAlvo = CONFIGURACAO.URL_DETALHES_TURMA + encodeURIComponent(codigoDiscip);
-            const ordem = [
-                indiceProxyPreferido,
-                ...CONFIGURACAO.PROXIES_CORS.map((_, indice) => indice).filter(indice => indice !== indiceProxyPreferido)
-            ];
+            const erros = [];
 
-            try {
-                const html = await buscarPrimeiraRespostaValida(
-                    urlAlvo,
-                    ordem,
-                    html => /Lista\s+de\s+Turmas|C[oó]digo\s+da\s+Turma|C digo\s+da\s+Turma/i.test(html),
-                    'os dados de turma da disciplina'
-                );
-                if (!html || html.length < 100) throw new Error('Resposta vazia ou incompleta');
-                if (/Nenhum registro encontrado|nenhum registro/i.test(html)) return null;
+            // Respostas sem uma turma (inclusive a página intermediária que o
+            // Júpiter/proxy devolve para disciplinas sem oferta) são resultados
+            // normais: retornam null e não aumentam o contador de falhas.
+            for (const indiceProxy of ordemProxiesPara(codigoDiscip)) {
+                const urlProxy = CONFIGURACAO.PROXIES_CORS[indiceProxy](urlAlvo);
 
-                const turmas = extrairDetalhesTurmas(html);
-                if (turmas.length === 0) return null;
+                try {
+                    await aguardarJanelaDeConsulta();
+                    const html = await buscarTextoComTimeout(urlProxy);
 
-                return {
-                    codigo: codigoDiscip,
-                    nome: extrairNomeDiscip(html, codigoDiscip),
-                    turmas
-                };
-            } catch (erro) {
-                throw new Error(`${codigoDiscip}: ${erro?.message || 'não foi possível consultar o Júpiter'}`);
+                    if (!html || html.length < 100) {
+                        return null;
+                    }
+
+                    if (!htmlPareceSerDaDisciplina(html, codigoDiscip)) {
+                        // Página intermediária/anti-bot: para esse monitor, isso
+                        // significa apenas que não há oferta consultável agora.
+                        return null;
+                    }
+
+                    if (!htmlContemTurmas(html) || /Nenhum registro encontrado|nenhum registro/i.test(html)) {
+                        return null;
+                    }
+
+                    const turmas = extrairDetalhesTurmas(html);
+                    if (turmas.length === 0) return null;
+
+                    indiceProxyPreferido = indiceProxy;
+                    return {
+                        codigo: codigoDiscip,
+                        nome: extrairNomeDiscip(html, codigoDiscip),
+                        turmas
+                    };
+                } catch (erro) {
+                    if (ehRateLimit(erro)) {
+                        erros.push(erro?.message || String(erro));
+                        await aplicarPausaPorRateLimit();
+                        continue;
+                    }
+
+                    // Tempo esgotado e resposta intermediária são tratados como
+                    // “sem turma ofertada”; não vale a pena atrasar a fila tentando
+                    // dois proxies para uma disciplina sem oferta.
+                    if (/Tempo esgotado|Timeout|intermediária|intermediaria/i.test(erro?.message || '')) {
+                        return null;
+                    }
+
+                    erros.push(erro?.message || String(erro));
+                }
             }
+
+            // Se os proxies não entregaram uma página consultável após as tentativas,
+            // a disciplina é tratada como sem turma ofertada no momento, sem alertar erro.
+            console.info(`${codigoDiscip}: sem turma consultável no momento.`, erros.join(' | '));
+            return null;
         }
 
         async function buscarPrimeiraRespostaValida(urlAlvo, ordem, validarResposta, descricao = 'os dados solicitados') {
             const erros = [];
 
-            // A fila é serial e espaçada. Em caso de HTTP 429, há uma pausa antes
-            // de tentar novamente, em vez de disparar novas consultas em sequência.
             for (const indiceProxy of ordem) {
                 const urlProxy = CONFIGURACAO.PROXIES_CORS[indiceProxy](urlAlvo);
 
@@ -1028,9 +1093,6 @@
                             await aplicarPausaPorRateLimit();
                             continue;
                         }
-
-                        // Erros que não são 429 não melhoram com nova tentativa no
-                        // mesmo proxy; passa para a alternativa.
                         break;
                     }
                 }
