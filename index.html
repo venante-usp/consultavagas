@@ -458,7 +458,7 @@
         <!-- Cabeçalho -->
         <div class="header">
             <h1>📚 Monitor de Vagas - PNV</h1>
-            <p class="header-subtitle">Consulta de turmas e vagas por categoria no Júpiter. A consulta completa também confere a lista atual de disciplinas PNV antes de buscar as turmas.</p>
+            <p class="header-subtitle">Consulta de turmas e vagas por categoria no Júpiter. A consulta completa também confere a lista atual de disciplinas PNV antes de buscar as turmas. Modo confiável: consultas espaçadas para reduzir omissões.</p>
             <div class="fonte-lista" id="fonteLista">📋 Lista de disciplinas: ainda não sincronizada com o Júpiter.</div>
             
             <div class="header-controls">
@@ -599,14 +599,14 @@
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000,
-            // Modo rápido: até seis consultas simultâneas, distribuídas entre
-            // os proxies e com inícios levemente espaçados. Se houver HTTP 429,
-            // a página reduz o ritmo com uma pausa global antes da tentativa seguinte.
-            LIMITE_PARALELO: 6,
-            INTERVALO_ENTRE_CONSULTAS: 180,
-            PAUSA_APOS_RATE_LIMIT: 10000,
+            // Modo confiável: duas consultas simultâneas, com inícios bem
+            // espaçados. É mais lento, mas reduz páginas intermediárias, timeouts
+            // e respostas incompletas dos proxies.
+            LIMITE_PARALELO: 2,
+            INTERVALO_ENTRE_CONSULTAS: 900,
+            PAUSA_APOS_RATE_LIMIT: 30000,
             TENTATIVAS_POR_PROXY_EM_429: 2,
-            TIMEOUT_REQUISICAO: 8000,
+            TIMEOUT_REQUISICAO: 14000,
             PROXIES_CORS: [
                 url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
                 url => `https://corsproxy.io/?${encodeURIComponent(url)}`
@@ -618,10 +618,10 @@
         let proximoUpdate = 0;
 
         class CacheManager {
-            static CHAVE_DISCIPLINAS = 'pnv_disciplinas_v12';
-            static CHAVE_METADATA = 'pnv_metadata_v12';
-            static CHAVE_DISCIPLINAS_ANTIGA = 'pnv_disciplinas_v11';
-            static CHAVE_METADATA_ANTIGA = 'pnv_metadata_v11';
+            static CHAVE_DISCIPLINAS = 'pnv_disciplinas_v13';
+            static CHAVE_METADATA = 'pnv_metadata_v13';
+            static CHAVE_DISCIPLINAS_ANTIGA = 'pnv_disciplinas_v12';
+            static CHAVE_METADATA_ANTIGA = 'pnv_metadata_v12';
 
             static lerJson(chave) {
                 try {
@@ -689,8 +689,10 @@
             static async deveFazerScanCompleto() {
                 const metadata = await this.obterMetadata();
                 if (!metadata || !metadata.timestamp) return true;
-                // Um cache de versão anterior não contém a lista oficial: faz uma
-                // sincronização completa uma vez, para permitir entradas e saídas.
+                // Uma versão anterior pode ter classificado respostas instáveis como
+                // “sem oferta”. Ela é exibida apenas enquanto a nova consulta começa,
+                // mas sempre força uma sincronização completa uma vez.
+                if (metadata.legado) return true;
                 if (!Array.isArray(metadata.codigosOficiais) || metadata.codigosOficiais.length === 0) return true;
                 return Date.now() - metadata.timestamp >= CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
             }
@@ -782,19 +784,19 @@
                     atualizarInfoLista(listaInfo);
                     if (listaInfo.aviso) avisos.push(listaInfo.aviso);
 
-                    mostrarCarregando(`Consulta rápida: preparando ${codigosPNV.length} disciplinas da lista atual...`);
+                    mostrarCarregando(`Consulta cuidadosa: preparando ${codigosPNV.length} disciplinas da lista atual...`);
                     atualizarContador(`⏳ Lista atual: ${codigosPNV.length} códigos PNV. Iniciando consulta de turmas...`);
 
                     const resultado = await buscarDisciplinasComLimite(codigosPNV, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
-                            mostrarCarregando(`Consulta rápida: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
+                            mostrarCarregando(`Consulta cuidadosa: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
                             atualizarContador(`⚡ ${concluidas}/${total} disciplinas consultadas — ${encontradas} com turmas`);
                         }
                     });
 
-                    // Disciplinas sem turma ofertada deixam o monitor. Somente falhas
-                    // reais de consulta preservam o último dado salvo, para não apagar
-                    // uma disciplina apenas por instabilidade temporária do proxy.
+                    // Apenas uma página válida que confirme ausência de turmas deixa
+                    // o monitor. Respostas intermediárias, lentas ou incompletas são
+                    // falhas temporárias e preservam o último dado salvo.
                     const codigosAtuais = new Set(codigosPNV);
                     const atualizadasPorCodigo = new Map(resultado.disciplinas.map(disciplina => [disciplina.codigo, disciplina]));
                     const codigosComFalha = new Set(resultado.falhasCodigos || []);
@@ -848,9 +850,9 @@
                     const atualizadasPorCodigo = new Map(resultado.disciplinas.map(disciplina => [disciplina.codigo, disciplina]));
                     const semTurma = new Set(resultado.semTurmaCodigos || []);
 
-                    // A atualização curta também remove uma disciplina que foi
-                    // consultada com sucesso, mas não possui turma ofertada agora.
-                    // Falhas reais continuam com o último dado visível.
+                    // A atualização curta remove somente uma disciplina cuja página
+                    // válida confirmou ausência de oferta. Falhas temporárias mantêm
+                    // o último dado visível.
                     todasDisciplinas = todasDisciplinas
                         .filter(disciplina => !semTurma.has(disciplina.codigo))
                         .map(disciplina => atualizadasPorCodigo.get(disciplina.codigo) || disciplina);
@@ -884,8 +886,8 @@
             let proximoIndice = 0;
 
             // Cada trabalhador recebe a próxima disciplina assim que termina.
-            // Com seis trabalhadores, a consulta completa fica bem mais ágil sem
-            // criar um pico de dezenas de requisições de uma vez.
+            // Apenas dois trabalhadores evitam que o Júpiter ou o proxy devolvam
+            // páginas intermediárias e façam disciplinas ofertadas parecerem vazias.
             const totalTrabalhadores = Math.min(CONFIGURACAO.LIMITE_PARALELO, codigos.length);
 
             async function trabalhador() {
@@ -927,7 +929,7 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
-        // Serializa somente o início das requisições. Depois de iniciadas, até
+        // Serializa o início das requisições. Depois de iniciadas, no máximo
         // LIMITE_PARALELO respostas ficam em trânsito simultaneamente.
         async function aguardarJanelaDeConsulta() {
             const minhaVez = filaDeInicioDeConsultas.then(async () => {
@@ -976,8 +978,15 @@
 
         function htmlPareceSerDaDisciplina(html, codigoDiscip) {
             const texto = htmlParaTexto(html);
-            return new RegExp(`\\b${String(codigoDiscip).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(texto) ||
-                   /Disciplina\s*:/i.test(texto);
+            const codigoSeguro = String(codigoDiscip).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const temCodigo = new RegExp(`\\b${codigoSeguro}\\b`, 'i').test(texto);
+            const temCabecalho = /Disciplina\s*:/i.test(texto);
+            const temContextoDoJupiter = /Lista\s+de\s+Turmas|Clique\s+para\s+consultar/i.test(texto);
+
+            // Uma página intermediária pode conter a palavra “Disciplina”, mas não
+            // os três sinais acima ao mesmo tempo. Só uma página confirmada pode
+            // ser usada para concluir que não há oferta.
+            return temCodigo && temCabecalho && temContextoDoJupiter;
         }
 
         function extrairCodigosDaListaOficial(html) {
@@ -1012,9 +1021,10 @@
             const urlAlvo = CONFIGURACAO.URL_DETALHES_TURMA + encodeURIComponent(codigoDiscip);
             const erros = [];
 
-            // Respostas sem uma turma (inclusive a página intermediária que o
-            // Júpiter/proxy devolve para disciplinas sem oferta) são resultados
-            // normais: retornam null e não aumentam o contador de falhas.
+            // Só retorna null quando uma página válida do próprio Júpiter confirma
+            // que a disciplina não tem turma. Timeout, página intermediária, HTML
+            // incompleto e falha de parser são falhas temporárias: tentamos o outro
+            // proxy e preservamos os dados antigos, em vez de esconder a disciplina.
             for (const indiceProxy of ordemProxiesPara(codigoDiscip)) {
                 const urlProxy = CONFIGURACAO.PROXIES_CORS[indiceProxy](urlAlvo);
 
@@ -1023,21 +1033,23 @@
                     const html = await buscarTextoComTimeout(urlProxy);
 
                     if (!html || html.length < 100) {
-                        return null;
+                        throw new Error('Resposta vazia ou incompleta do proxy');
                     }
 
                     if (!htmlPareceSerDaDisciplina(html, codigoDiscip)) {
-                        // Página intermediária/anti-bot: para esse monitor, isso
-                        // significa apenas que não há oferta consultável agora.
-                        return null;
+                        throw new Error('O proxy retornou uma página intermediária ou não confirmou a disciplina');
                     }
 
-                    if (!htmlContemTurmas(html) || /Nenhum registro encontrado|nenhum registro/i.test(html)) {
+                    // Esta é a única situação tratada como “sem oferta”: a página
+                    // correta da disciplina foi recebida, porém não lista turmas.
+                    if (/Nenhum registro encontrado|nenhum registro/i.test(html) || !htmlContemTurmas(html)) {
                         return null;
                     }
 
                     const turmas = extrairDetalhesTurmas(html);
-                    if (turmas.length === 0) return null;
+                    if (turmas.length === 0) {
+                        throw new Error('A página da disciplina foi recebida, mas nenhuma turma pôde ser interpretada');
+                    }
 
                     indiceProxyPreferido = indiceProxy;
                     return {
@@ -1046,27 +1058,22 @@
                         turmas
                     };
                 } catch (erro) {
+                    const mensagem = erro?.message || String(erro);
+                    erros.push(mensagem);
+
                     if (ehRateLimit(erro)) {
-                        erros.push(erro?.message || String(erro));
                         await aplicarPausaPorRateLimit();
-                        continue;
+                    } else {
+                        // Pequena pausa antes de tentar o próximo proxy. Evita uma
+                        // segunda solicitação imediata para uma resposta instável.
+                        await esperar(500);
                     }
-
-                    // Tempo esgotado e resposta intermediária são tratados como
-                    // “sem turma ofertada”; não vale a pena atrasar a fila tentando
-                    // dois proxies para uma disciplina sem oferta.
-                    if (/Tempo esgotado|Timeout|intermediária|intermediaria/i.test(erro?.message || '')) {
-                        return null;
-                    }
-
-                    erros.push(erro?.message || String(erro));
                 }
             }
 
-            // Se os proxies não entregaram uma página consultável após as tentativas,
-            // a disciplina é tratada como sem turma ofertada no momento, sem alertar erro.
-            console.info(`${codigoDiscip}: sem turma consultável no momento.`, erros.join(' | '));
-            return null;
+            // Não tratamos isso como ausência de oferta. A chamada acima será
+            // contabilizada como falha e o cache da disciplina continua na tela.
+            throw new Error(`${codigoDiscip}: nenhum proxy confirmou uma resposta válida (${erros.join(' | ') || 'erro desconhecido'})`);
         }
 
         async function buscarPrimeiraRespostaValida(urlAlvo, ordem, validarResposta, descricao = 'os dados solicitados') {
