@@ -599,11 +599,11 @@
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000,
-            // Uma consulta por vez: o Júpiter e os proxies públicos bloqueiam
-            // sequências paralelas com HTTP 429 (limite de requisições).
-            LIMITE_PARALELO: 1,
-            INTERVALO_ENTRE_CONSULTAS: 1400,
-            PAUSA_APOS_RATE_LIMIT: 20000,
+            // Até três consultas em paralelo. Os inícios são espaçados para
+            // ganhar velocidade sem reproduzir o bloqueio HTTP 429 da versão anterior.
+            LIMITE_PARALELO: 3,
+            INTERVALO_ENTRE_CONSULTAS: 550,
+            PAUSA_APOS_RATE_LIMIT: 30000,
             TENTATIVAS_POR_PROXY_EM_429: 2,
             TIMEOUT_REQUISICAO: 15000,
             PROXIES_CORS: [
@@ -617,10 +617,10 @@
         let proximoUpdate = 0;
 
         class CacheManager {
-            static CHAVE_DISCIPLINAS = 'pnv_disciplinas_v10';
-            static CHAVE_METADATA = 'pnv_metadata_v10';
-            static CHAVE_DISCIPLINAS_ANTIGA = 'pnv_disciplinas_v7';
-            static CHAVE_METADATA_ANTIGA = 'pnv_metadata_v7';
+            static CHAVE_DISCIPLINAS = 'pnv_disciplinas_v11';
+            static CHAVE_METADATA = 'pnv_metadata_v11';
+            static CHAVE_DISCIPLINAS_ANTIGA = 'pnv_disciplinas_v10';
+            static CHAVE_METADATA_ANTIGA = 'pnv_metadata_v10';
 
             static lerJson(chave) {
                 try {
@@ -781,12 +781,12 @@
                     atualizarInfoLista(listaInfo);
                     if (listaInfo.aviso) avisos.push(listaInfo.aviso);
 
-                    mostrarCarregando(`Consulta gradual: preparando ${codigosPNV.length} disciplinas da lista atual...`);
+                    mostrarCarregando(`Consulta em paralelo: preparando ${codigosPNV.length} disciplinas da lista atual...`);
                     atualizarContador(`⏳ Lista atual: ${codigosPNV.length} códigos PNV. Iniciando consulta de turmas...`);
 
                     const resultado = await buscarDisciplinasComLimite(codigosPNV, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
-                            mostrarCarregando(`Consulta gradual: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
+                            mostrarCarregando(`Consulta em paralelo: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
                             atualizarContador(`⚡ ${concluidas}/${total} disciplinas consultadas — ${encontradas} com turmas`);
                         }
                     });
@@ -905,16 +905,29 @@
 
         let indiceProxyPreferido = 0;
         let proximaConsultaPermitida = 0;
+        let pausaGlobalAte = 0;
+        let filaDeInicioDeConsultas = Promise.resolve();
 
         function esperar(ms) {
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
+        // Serializa somente o *início* das requisições. Depois de iniciadas, até
+        // LIMITE_PARALELO respostas podem estar em trânsito simultaneamente.
+        // Isso é bem mais rápido que processar uma disciplina inteira por vez,
+        // mas evita picos de dezenas de requisições que provocam HTTP 429.
         async function aguardarJanelaDeConsulta() {
-            const agora = Date.now();
-            const espera = Math.max(0, proximaConsultaPermitida - agora);
-            if (espera > 0) await esperar(espera);
-            proximaConsultaPermitida = Date.now() + CONFIGURACAO.INTERVALO_ENTRE_CONSULTAS;
+            const minhaVez = filaDeInicioDeConsultas.then(async () => {
+                const agora = Date.now();
+                const inicioPermitido = Math.max(proximaConsultaPermitida, pausaGlobalAte);
+                const espera = Math.max(0, inicioPermitido - agora);
+                if (espera > 0) await esperar(espera);
+                proximaConsultaPermitida = Date.now() + CONFIGURACAO.INTERVALO_ENTRE_CONSULTAS;
+            });
+
+            // Uma falha em uma consulta nunca deve bloquear a fila das próximas.
+            filaDeInicioDeConsultas = minhaVez.catch(() => {});
+            return minhaVez;
         }
 
         function ehRateLimit(erro) {
@@ -923,9 +936,10 @@
 
         async function aplicarPausaPorRateLimit() {
             const ate = Date.now() + CONFIGURACAO.PAUSA_APOS_RATE_LIMIT;
-            proximaConsultaPermitida = Math.max(proximaConsultaPermitida, ate);
-            atualizarContador(`⏸️ Limite de consultas detectado. Retomando em ${Math.ceil(CONFIGURACAO.PAUSA_APOS_RATE_LIMIT / 1000)} s...`);
-            await esperar(Math.max(0, proximaConsultaPermitida - Date.now()));
+            pausaGlobalAte = Math.max(pausaGlobalAte, ate);
+            proximaConsultaPermitida = Math.max(proximaConsultaPermitida, pausaGlobalAte);
+            atualizarContador(`⏸️ Limite de consultas detectado. Tentando novamente em ${Math.ceil(Math.max(0, pausaGlobalAte - Date.now()) / 1000)} s...`);
+            await esperar(Math.max(0, pausaGlobalAte - Date.now()));
         }
 
         function extrairCodigosDaListaOficial(html) {
