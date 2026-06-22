@@ -453,6 +453,7 @@
 
     <script>
         const CONFIGURACAO = {
+            URL_LISTA_PNV: 'https://uspdigital.usp.br/jupiterweb/jupDisciplinaLista?codcg=3&pfxdisval=PNV&tipo=D',
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,    // 5 minutos
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000, // 15 dias
@@ -462,7 +463,6 @@
         let todasDisciplinas = [];
         let filtroAtual = 'todos';
         let proximoUpdate = 0;
-        let ultimoScanCompleto = 0;
 
         // ===== GERENCIAMENTO DE CACHE E PERSISTÊNCIA =====
         class CacheManager {
@@ -474,21 +474,21 @@
                 };
                 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v1', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v1', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v2', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v2', JSON.stringify(metadata));
                 } catch (e) {
                     console.error('Erro ao salvar cache:', e);
                 }
             }
 
             static async salvarAtualizacaoLeve(disciplinas) {
-                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v1') || '{}');
+                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v2') || '{}');
                 metadata.ultimaAtualizacaoLeve = Date.now();
                 metadata.tipo = metadata.tipo || 'cache';
                 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v1', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v1', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v2', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v2', JSON.stringify(metadata));
                 } catch (e) {
                     console.error('Erro ao salvar atualização:', e);
                 }
@@ -496,7 +496,7 @@
 
             static async carregarDisciplinas() {
                 try {
-                    const dados = localStorage.getItem('pnv_disciplinas_v1');
+                    const dados = localStorage.getItem('pnv_disciplinas_v2');
                     return dados ? JSON.parse(dados) : null;
                 } catch (e) {
                     console.error('Erro ao carregar cache:', e);
@@ -506,7 +506,7 @@
 
             static async obterMetadata() {
                 try {
-                    const dados = localStorage.getItem('pnv_metadata_v1');
+                    const dados = localStorage.getItem('pnv_metadata_v2');
                     return dados ? JSON.parse(dados) : null;
                 } catch (e) {
                     return null;
@@ -589,12 +589,19 @@
                 definirStatus('carregando');
 
                 try {
-                    const todosCodigos = gerarCodigosPNV();
-                    const disciplinas = await buscarDisciplinasComLimite(todosCodigos, false);
+                    // Extrair lista de códigos PNV da página do Jupiter
+                    const codigosPNV = await extrairCodigosPNV();
+                    
+                    if (!codigosPNV || codigosPNV.length === 0) {
+                        throw new Error('Nenhuma disciplina PNV encontrada');
+                    }
+
+                    mostrarCarregando(`🔄 Escaneando ${codigosPNV.length} disciplinas PNV...`);
+                    
+                    const disciplinas = await buscarDisciplinasComLimite(codigosPNV, false);
                     todasDisciplinas = disciplinas.filter(d => d.turmas && d.turmas.length > 0);
 
                     await CacheManager.salvarDisciplinas(todasDisciplinas);
-                    ultimoScanCompleto = Date.now();
                     
                     console.log(`✅ Scan completo concluído: ${todasDisciplinas.length} disciplinas`);
                     atualizarUltimaAtualizacao();
@@ -604,6 +611,7 @@
                 } catch (erro) {
                     console.error('Erro ao fazer scan completo:', erro);
                     definirStatus('erro');
+                    mostrarAlerta('Erro ao escanear: ' + erro.message);
                 } finally {
                     this.executando.scanCompleto = false;
                 }
@@ -642,40 +650,44 @@
             }
         }
 
-        // ===== INICIALIZAÇÃO DA PÁGINA =====
-        document.addEventListener('DOMContentLoaded', async () => {
+        // ===== FUNÇÕES PRINCIPAIS =====
+        async function extrairCodigosPNV() {
             try {
-                // Carregar dados do cache
-                const disciplinasCache = await CacheManager.carregarDisciplinas();
+                console.log('📋 Extraindo lista de disciplinas PNV...');
+                const url = CONFIGURACAO.PROXY_CORS + encodeURIComponent(CONFIGURACAO.URL_LISTA_PNV);
                 
-                if (disciplinasCache && disciplinasCache.length > 0) {
-                    todasDisciplinas = disciplinasCache;
-                    renderizar();
-                    atualizarContador();
-                    atualizarUltimaAtualizacao();
-                } else {
-                    mostrarCarregando('🔄 Carregando dados iniciais...');
+                const resposta = await fetch(url);
+                if (!resposta.ok) throw new Error('Erro ao acessar página do Jupiter');
+                
+                const html = await resposta.text();
+                const codigos = new Set();
+
+                // Procurar por padrões como: onclick="obterTurma('PNV1234')"
+                const regexDireto = /obterTurma\('(PNV\d{4})'\)/gi;
+                let match;
+                while ((match = regexDireto.exec(html)) !== null) {
+                    codigos.add(match[1]);
                 }
 
-                // Inicializar sistema de fundo
-                SistemaFundo.iniciar();
+                // Alternativa: procurar por links que apontam para detalhes de turma
+                const regexLink = /href="[^"]*\?sgldis=(PNV\d{4})[^"]*"/gi;
+                while ((match = regexLink.exec(html)) !== null) {
+                    codigos.add(match[1]);
+                }
 
-                // Atualizar contagem regressiva a cada segundo
-                iniciarContagemRegressiva();
+                // Alternativa: procurar em <a> ou <button> com PNV
+                const regexTexto = />(PNV\d{4})</gi;
+                while ((match = regexTexto.exec(html)) !== null) {
+                    codigos.add(match[1]);
+                }
 
+                const resultado = Array.from(codigos).sort();
+                console.log(`✅ Encontradas ${resultado.length} disciplinas PNV`);
+                return resultado;
             } catch (erro) {
-                console.error('Erro ao inicializar:', erro);
-                mostrarAlerta('Erro ao inicializar: ' + erro.message);
+                console.error('Erro ao extrair códigos:', erro);
+                throw new Error('Falha ao extrair lista de disciplinas: ' + erro.message);
             }
-        });
-
-        // ===== FUNÇÕES PRINCIPAIS =====
-        function gerarCodigosPNV() {
-            const codigos = [];
-            for (let i = 0; i <= 9999; i++) {
-                codigos.push(`PNV${String(i).padStart(4, '0')}`);
-            }
-            return codigos;
         }
 
         async function buscarDisciplinasComLimite(codigos, atualizacaoLeve = false) {
@@ -693,6 +705,11 @@
                         disciplinas.push(resultado.value);
                     }
                 });
+
+                // Atualizar feedback (opcional para atualizações leves)
+                if (i % 50 === 0) {
+                    console.log(`Progresso: ${Math.min(i + limiteParalelo, codigos.length)}/${codigos.length}`);
+                }
             }
 
             return disciplinas;
@@ -935,6 +952,33 @@
                 </div>
             `;
         }
+
+        // ===== INICIALIZAÇÃO DA PÁGINA =====
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Carregar dados do cache
+                const disciplinasCache = await CacheManager.carregarDisciplinas();
+                
+                if (disciplinasCache && disciplinasCache.length > 0) {
+                    todasDisciplinas = disciplinasCache;
+                    renderizar();
+                    atualizarContador();
+                    atualizarUltimaAtualizacao();
+                } else {
+                    mostrarCarregando('🔄 Carregando dados iniciais...');
+                }
+
+                // Inicializar sistema de fundo
+                SistemaFundo.iniciar();
+
+                // Atualizar contagem regressiva a cada segundo
+                iniciarContagemRegressiva();
+
+            } catch (erro) {
+                console.error('Erro ao inicializar:', erro);
+                mostrarAlerta('Erro ao inicializar: ' + erro.message);
+            }
+        });
     </script>
 </body>
 </html>
