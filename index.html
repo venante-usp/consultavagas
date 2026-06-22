@@ -86,6 +86,20 @@
             display: flex;
             gap: 10px;
             flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .explicacao-controles {
+            width: 100%;
+            margin-top: 2px;
+            font-size: 11px;
+            line-height: 1.35;
+            color: #777;
+            text-align: right;
+        }
+
+        .explicacao-controles strong {
+            color: #555;
         }
 
         .btn {
@@ -111,7 +125,18 @@
             transform: translateY(-2px);
         }
 
-        .btn-atualizar:disabled {
+        .btn-atualizar-tudo {
+            background: #455a64;
+            color: white;
+        }
+
+        .btn-atualizar-tudo:hover:not(:disabled) {
+            background: #263238;
+            transform: translateY(-2px);
+        }
+
+        .btn-atualizar:disabled,
+        .btn-atualizar-tudo:disabled {
             background: #ccc;
             cursor: not-allowed;
             opacity: 0.6;
@@ -408,9 +433,20 @@
                     </div>
                 </div>
                 <div class="botoes-controle">
-                    <button class="btn btn-atualizar" id="botaoAtualizar" onclick="forcarAtualizacao()">
-                        🔄 Atualizar Agora
+                    <button class="btn btn-atualizar" id="botaoAtualizar" onclick="forcarAtualizacao()"
+                            title="Consulta novamente somente as disciplinas que já estão exibidas na página."
+                            aria-label="Atualizar somente as disciplinas exibidas">
+                        🔄 Atualizar disciplinas exibidas
                     </button>
+                    <button class="btn btn-atualizar-tudo" id="botaoAtualizarTudo" onclick="forcarAtualizacaoTotal()"
+                            title="Consulta novamente todas as 58 disciplinas configuradas, inclusive as que não apareceram ou falharam antes."
+                            aria-label="Consultar novamente todas as 58 disciplinas">
+                        🔁 Consultar as 58 disciplinas
+                    </button>
+                    <div class="explicacao-controles">
+                        <strong>Atualizar disciplinas exibidas:</strong> consulta só o que já aparece abaixo. 
+                        <strong>Consultar as 58 disciplinas:</strong> refaz a consulta completa, inclusive das que falharam antes.
+                    </div>
                 </div>
             </div>
         </div>
@@ -548,23 +584,23 @@
                 };
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v5', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v5', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v6', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v6', JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar cache:', erro);
                 }
             }
 
             static async salvarAtualizacaoLeve(disciplinas) {
-                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v5') || '{}');
+                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v6') || '{}');
                 metadata.ultimaAtualizacaoLeve = Date.now();
                 metadata.timestamp = metadata.timestamp || Date.now();
                 metadata.quantidade = disciplinas.length;
                 metadata.tipo = metadata.tipo || 'cache';
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v5', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v5', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v6', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v6', JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar atualização:', erro);
                 }
@@ -572,7 +608,7 @@
 
             static async carregarDisciplinas() {
                 try {
-                    const dados = localStorage.getItem('pnv_disciplinas_v5');
+                    const dados = localStorage.getItem('pnv_disciplinas_v6');
                     return dados ? JSON.parse(dados) : null;
                 } catch (erro) {
                     console.error('Erro ao carregar cache:', erro);
@@ -670,7 +706,7 @@
                     atualizarContador(`✅ ${todasDisciplinas.length} disciplina(s) com turma(s) encontradas`);
 
                     if (resultado.falhas > 0) {
-                        mostrarAlerta(`A consulta terminou, mas ${resultado.falhas} disciplina(s) não responderam. Use “Atualizar Agora” mais tarde para tentar novamente.`);
+                        mostrarAlerta(`A consulta terminou, mas ${resultado.falhas} disciplina(s) não responderam. Use “Consultar as 58 disciplinas” para tentar novamente.`);
                     }
                 } catch (erro) {
                     console.error('Erro ao fazer scan completo:', erro);
@@ -1026,12 +1062,24 @@
             }, 1000);
         }
 
-        async function forcarAtualizacao() {
-            const botao = document.getElementById('botaoAtualizar');
-            if (SistemaFundo.executando.scanCompleto || SistemaFundo.executando.atualizacaoLeve) return;
+        function consultasEmAndamento() {
+            return SistemaFundo.executando.scanCompleto || SistemaFundo.executando.atualizacaoLeve;
+        }
 
-            botao.disabled = true;
-            botao.textContent = '⏳ Carregando...';
+        function definirBotoesAtualizacao(desabilitados, textoAtualizar = '🔄 Atualizar disciplinas exibidas', textoTudo = '🔁 Consultar as 58 disciplinas') {
+            const botaoAtualizar = document.getElementById('botaoAtualizar');
+            const botaoAtualizarTudo = document.getElementById('botaoAtualizarTudo');
+
+            botaoAtualizar.disabled = desabilitados;
+            botaoAtualizarTudo.disabled = desabilitados;
+            botaoAtualizar.textContent = textoAtualizar;
+            botaoAtualizarTudo.textContent = textoTudo;
+        }
+
+        async function forcarAtualizacao() {
+            if (consultasEmAndamento()) return;
+
+            definirBotoesAtualizacao(true, '⏳ Atualizando exibidas...', '🔁 Consultar as 58 disciplinas');
             try {
                 if (todasDisciplinas.length === 0) {
                     await SistemaFundo.executarScanCompleto();
@@ -1039,8 +1087,20 @@
                     await SistemaFundo.executarAtualizacaoLeve();
                 }
             } finally {
-                botao.disabled = false;
-                botao.textContent = '🔄 Atualizar Agora';
+                definirBotoesAtualizacao(false);
+            }
+        }
+
+        async function forcarAtualizacaoTotal() {
+            if (consultasEmAndamento()) return;
+
+            definirBotoesAtualizacao(true, '🔄 Atualizar disciplinas exibidas', '⏳ Consultando as 58...');
+            try {
+                // Faz uma nova leitura de toda a lista configurada, inclusive disciplinas
+                // que ainda não apareciam no cache local.
+                await SistemaFundo.executarScanCompleto();
+            } finally {
+                definirBotoesAtualizacao(false);
             }
         }
 
