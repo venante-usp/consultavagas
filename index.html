@@ -253,6 +253,35 @@
             word-break: break-word;
         }
 
+        .resumo-pessoas {
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-radius: 7px;
+            background: #eef3ff;
+            border: 1px solid #d7e2ff;
+            color: #334;
+        }
+
+        .resumo-pessoas-linha-principal {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        .resumo-pessoas-linha-principal strong {
+            font-size: 18px;
+            color: #4c63c7;
+            white-space: nowrap;
+        }
+
+        .resumo-pessoas-detalhe {
+            margin-top: 4px;
+            color: #667;
+            font-size: 11px;
+        }
+
         .turmas {
             display: flex;
             flex-direction: column;
@@ -584,23 +613,23 @@
                 };
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v6', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v6', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v7', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v7', JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar cache:', erro);
                 }
             }
 
             static async salvarAtualizacaoLeve(disciplinas) {
-                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v6') || '{}');
+                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v7') || '{}');
                 metadata.ultimaAtualizacaoLeve = Date.now();
                 metadata.timestamp = metadata.timestamp || Date.now();
                 metadata.quantidade = disciplinas.length;
                 metadata.tipo = metadata.tipo || 'cache';
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v6', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v6', JSON.stringify(metadata));
+                    localStorage.setItem('pnv_disciplinas_v7', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v7', JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar atualização:', erro);
                 }
@@ -608,7 +637,7 @@
 
             static async carregarDisciplinas() {
                 try {
-                    const dados = localStorage.getItem('pnv_disciplinas_v6');
+                    const dados = localStorage.getItem('pnv_disciplinas_v7');
                     return dados ? JSON.parse(dados) : null;
                 } catch (erro) {
                     console.error('Erro ao carregar cache:', erro);
@@ -921,6 +950,11 @@
                 const antesDasVagas = bloco.slice(0, cabecalhoVagas);
                 const horario = extrairHorario(antesDasVagas);
                 const categorias = extrairCategoriasDeVaga(bloco.slice(cabecalhoVagas));
+                const tipoTurma = extrairTipoTurma(antesDasVagas);
+                const turmaTeoricaVinculada = extrairTurmaTeoricaVinculada(antesDasVagas);
+                // Em turmas vinculadas, a parte prática é a mesma disciplina/alunado da
+                // turma teórica. O grupo evita somar essas pessoas duas vezes no resumo.
+                const grupoTurma = turmaTeoricaVinculada || codigoTurma;
 
                 for (const categoria of categorias) {
                     const ocupadas = categoria.inscritos + categoria.pendentes + categoria.matriculados;
@@ -931,6 +965,9 @@
 
                     turmas.push({
                         codigo: codigoTurma,
+                        grupoTurma,
+                        tipoTurma,
+                        turmaTeoricaVinculada,
                         horario,
                         dia: extrairDias(horario),
                         categoria: categoria.nome,
@@ -945,6 +982,16 @@
             }
 
             return turmas;
+        }
+
+        function extrairTipoTurma(texto) {
+            const encontrado = texto.match(/Tipo\s+da\s+Turma\s*:\s*(.*?)(?=\s+(?:Observa|Hor[aá]rio|Vagas)\b|$)/i);
+            return normalizarTexto(encontrado?.[1] || '');
+        }
+
+        function extrairTurmaTeoricaVinculada(texto) {
+            const encontrado = texto.match(/C(?:[oó]| )digo\s+da\s+Turma\s+Te(?:[oó]| )rica\s*:\s*(\d+)/i);
+            return encontrado?.[1] || null;
         }
 
         function extrairHorario(texto) {
@@ -1002,6 +1049,55 @@
             renderizar();
         }
 
+        function somarRegistros(turmas) {
+            return turmas.reduce((soma, turma) => ({
+                inscritos: soma.inscritos + Number(turma.inscritos || 0),
+                pendentes: soma.pendentes + Number(turma.pendentes || 0),
+                matriculados: soma.matriculados + Number(turma.matriculados || 0)
+            }), { inscritos: 0, pendentes: 0, matriculados: 0 });
+        }
+
+        function resumirPessoasDaDisciplina(disciplina) {
+            // Primeiro, soma as modalidades de vaga de cada turma física.
+            // Depois, para turmas práticas vinculadas, usa a turma teórica como
+            // referência do grupo — assim o mesmo aluno não é contado duas vezes.
+            const porGrupo = new Map();
+
+            for (const turma of disciplina.turmas) {
+                const grupo = turma.grupoTurma || turma.codigo;
+                if (!porGrupo.has(grupo)) porGrupo.set(grupo, new Map());
+                const porCodigo = porGrupo.get(grupo);
+                if (!porCodigo.has(turma.codigo)) porCodigo.set(turma.codigo, []);
+                porCodigo.get(turma.codigo).push(turma);
+            }
+
+            const total = { inscritos: 0, pendentes: 0, matriculados: 0 };
+
+            for (const [grupo, porCodigo] of porGrupo) {
+                // Havendo turma teórica principal, ela representa o alunado do grupo.
+                // Caso contrário, usa a maior contagem entre as turmas do grupo.
+                const principal = porCodigo.get(grupo);
+                const candidatas = principal
+                    ? [somarRegistros(principal)]
+                    : Array.from(porCodigo.values(), somarRegistros);
+
+                const escolhida = candidatas.reduce((maior, atual) => {
+                    const totalMaior = maior.inscritos + maior.pendentes + maior.matriculados;
+                    const totalAtual = atual.inscritos + atual.pendentes + atual.matriculados;
+                    return totalAtual > totalMaior ? atual : maior;
+                }, { inscritos: 0, pendentes: 0, matriculados: 0 });
+
+                total.inscritos += escolhida.inscritos;
+                total.pendentes += escolhida.pendentes;
+                total.matriculados += escolhida.matriculados;
+            }
+
+            return {
+                ...total,
+                pessoas: total.inscritos + total.pendentes + total.matriculados
+            };
+        }
+
         function renderizar() {
             const conteudo = document.getElementById('conteudo');
             const filtradas = filtrarDisciplinas();
@@ -1011,11 +1107,20 @@
                 return;
             }
 
-            const html = filtradas.map(disciplina => `
+            const html = filtradas.map(disciplina => {
+                const resumo = resumirPessoasDaDisciplina(disciplina);
+                return `
                 <div class="carta-disciplina">
                     <div class="cabecalho-disciplina">
                         <div class="codigo-disciplina">${escaparHtml(disciplina.codigo)}</div>
                         <div class="nome-disciplina">${escaparHtml(disciplina.nome)}</div>
+                        <div class="resumo-pessoas" title="Total calculado sem duplicar turmas práticas vinculadas.">
+                            <div class="resumo-pessoas-linha-principal">
+                                <span>👥 Pessoas registradas na disciplina</span>
+                                <strong>${resumo.pessoas}</strong>
+                            </div>
+                            <div class="resumo-pessoas-detalhe">${resumo.inscritos} inscritos · ${resumo.pendentes} pendentes · ${resumo.matriculados} matriculados</div>
+                        </div>
                     </div>
                     <div class="turmas">
                         ${disciplina.turmas.map(turma => {
@@ -1031,7 +1136,8 @@
                                 </div>`;
                         }).join('')}
                     </div>
-                </div>`).join('');
+                </div>`;
+            }).join('');
 
             conteudo.innerHTML = `<div class="grid-disciplinas">${html}</div>`;
         }
