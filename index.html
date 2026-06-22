@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Vagas - PNV</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 28px;
+        }
+
+        .header-subtitle {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .header-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .status-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 2s infinite;
+            flex-shrink: 0;
+        }
+
+        .status-dot.carregando {
+            background: #FFC107;
+        }
+
+        .status-dot.erro {
+            background: #F44336;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .botoes-controle {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-atualizar {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-atualizar:hover:not(:disabled) {
+            background: #764ba2;
+            transform: translateY(-2px);
+        }
+
+        .btn-atualizar:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .filtros {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        .filtros-titulo {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+
+        .botoes-filtro {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-filtro {
+            padding: 8px 14px;
+            border: 2px solid #ddd;
+            background: white;
+            color: #666;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .btn-filtro:hover {
+            border-color: #667eea;
+        }
+
+        .btn-filtro.ativo {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .alerta {
+            background: #ffebee;
+            border: 1px solid #F44336;
+            color: #C62828;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .alerta-icone {
+            flex-shrink: 0;
+            font-size: 18px;
+        }
+
+        .grid-disciplinas {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 20px;
+        }
+
+        .carta-disciplina {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            transition: all 0.3s;
+            border-left: 5px solid #667eea;
+        }
+
+        .carta-disciplina:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .carta-disciplina.lotado {
+            border-left-color: #F44336;
+        }
+
+        .carta-disciplina.poucos {
+            border-left-color: #FFC107;
+        }
+
+        .carta-disciplina.disponivel {
+            border-left-color: #4CAF50;
+        }
+
+        .cabecalho-disciplina {
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 12px;
+            margin-bottom: 12px;
+        }
+
+        .codigo-disciplina {
+            font-weight: 700;
+            font-size: 18px;
+            color: #333;
+        }
+
+        .nome-disciplina {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+            word-break: break-word;
+        }
+
+        .turmas {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .item-turma {
+            background: #fafafa;
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 3px solid #667eea;
+        }
+
+        .horario-turma {
+            font-weight: 600;
+            color: #333;
+            font-size: 13px;
+            margin-bottom: 6px;
+        }
+
+        .codigo-turma {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        .barra-vagas {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 6px;
+        }
+
+        .preenchimento {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            transition: width 0.3s ease;
+        }
+
+        .preenchimento.poucos {
+            background: linear-gradient(90deg, #FFC107, #FF9800);
+        }
+
+        .preenchimento.lotado {
+            background: #F44336;
+        }
+
+        .info-vagas {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .sem-resultados {
+            background: white;
+            padding: 50px 20px;
+            border-radius: 10px;
+            text-align: center;
+            color: #888;
+            font-size: 16px;
+        }
+
+        .carregando {
+            background: white;
+            padding: 50px 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: girar 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes girar {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .texto-carregando {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .rodape-info {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            color: #999;
+            font-size: 12px;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .header-controls {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .status-info {
+                width: 100%;
+            }
+
+            .grid-disciplinas {
+                grid-template-columns: 1fr;
+            }
+
+            .botoes-controle {
+                width: 100%;
+            }
+
+            .btn {
+                flex: 1;
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: 10px;
+            }
+
+            .header {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 20px;
+            }
+
+            .botoes-filtro {
+                gap: 6px;
+            }
+
+            .btn-filtro {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Cabeçalho -->
+        <div class="header">
+            <h1>📚 Monitor de Vagas - PNV</h1>
+            <p class="header-subtitle">Monitoramento em tempo real das disciplinas disponíveis</p>
+            
+            <div class="header-controls">
+                <div class="status-info">
+                    <div class="status-dot" id="indicadorStatus"></div>
+                    <div>
+                        <div>Última atualização: <strong id="ultimaAtualizacao">--:--:--</strong></div>
+                        <div>Próxima em: <strong id="proximaAtualizacao">60</strong>s</div>
+                    </div>
+                </div>
+                <div class="botoes-controle">
+                    <button class="btn btn-atualizar" id="botaoAtualizar" onclick="forcarAtualizacao()">
+                        🔄 Atualizar Agora
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filtros -->
+        <div class="filtros">
+            <div class="filtros-titulo">🔍 Filtrar por disponibilidade:</div>
+            <div class="botoes-filtro">
+                <button class="btn-filtro ativo" onclick="definirFiltro('todos')">
+                    📋 Todas as disciplinas
+                </button>
+                <button class="btn-filtro" onclick="definirFiltro('disponiveis')">
+                    ✅ Com vagas disponíveis
+                </button>
+                <button class="btn-filtro" onclick="definirFiltro('poucos')">
+                    ⚠️ Poucas vagas
+                </button>
+                <button class="btn-filtro" onclick="definirFiltro('lotadas')">
+                    ❌ Sem vagas
+                </button>
+            </div>
+        </div>
+
+        <!-- Alertas -->
+        <div id="containerAlertas"></div>
+
+        <!-- Conteúdo Principal -->
+        <div id="conteudo"></div>
+
+        <!-- Rodapé -->
+        <div class="rodape-info">
+            💡 A página atualiza automaticamente a cada 60 segundos com as informações mais recentes do Jupiter
+        </div>
+    </div>
+
+    <script>
+        const CONFIGURACAO = {
+            URL_LISTA_DISCIPLINAS: 'https://uspdigital.usp.br/jupiterweb/obterDisciplina?nomdis=&sgldis=PNV',
+            URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
+            INTERVALO_ATUALIZACAO: 60000, // 60 segundos
+            PROXY_CORS: 'https://api.allorigins.win/raw?url=',
+        };
+
+        let todasDisciplinas = [];
+        let intervaloAtualizacao = null;
+        let filtroAtual = 'todos';
+        let contagemRegressiva = CONFIGURACAO.INTERVALO_ATUALIZACAO / 1000;
+
+        // Inicializar ao carregar a página
+        document.addEventListener('DOMContentLoaded', () => {
+            carregarDisciplinas();
+            iniciarAtualizacaoAutomatica();
+            iniciarContagemRegressiva();
+        });
+
+        function definirFiltro(filtro) {
+            filtroAtual = filtro;
+            document.querySelectorAll('.btn-filtro').forEach(btn => btn.classList.remove('ativo'));
+            event.target.classList.add('ativo');
+            renderizar();
+        }
+
+        function forcarAtualizacao() {
+            const botao = document.getElementById('botaoAtualizar');
+            botao.disabled = true;
+            botao.textContent = '⏳ Carregando...';
+            carregarDisciplinas().finally(() => {
+                botao.disabled = false;
+                botao.textContent = '🔄 Atualizar Agora';
+            });
+        }
+
+        function iniciarContagemRegressiva() {
+            setInterval(() => {
+                contagemRegressiva--;
+                if (contagemRegressiva < 0) {
+                    contagemRegressiva = CONFIGURACAO.INTERVALO_ATUALIZACAO / 1000;
+                }
+                document.getElementById('proximaAtualizacao').textContent = Math.ceil(contagemRegressiva);
+            }, 1000);
+        }
+
+        function iniciarAtualizacaoAutomatica() {
+            intervaloAtualizacao = setInterval(() => {
+                carregarDisciplinas();
+                contagemRegressiva = CONFIGURACAO.INTERVALO_ATUALIZACAO / 1000;
+            }, CONFIGURACAO.INTERVALO_ATUALIZACAO);
+        }
+
+        async function carregarDisciplinas() {
+            definirStatus('carregando');
+            const containerAlertas = document.getElementById('containerAlertas');
+            containerAlertas.innerHTML = '';
+
+            try {
+                // Buscar lista de disciplinas PNV
+                const listaHTML = await buscarListaDisciplinas();
+                const listaCodigos = extrairCodigosDisciplinas(listaHTML);
+
+                if (listaCodigos.length === 0) {
+                    throw new Error('Nenhuma disciplina PNV encontrada neste semestre');
+                }
+
+                // Buscar detalhes de cada disciplina
+                todasDisciplinas = await Promise.all(
+                    listaCodigos.map(codigo => buscarDetalhesDiscip(codigo))
+                );
+
+                // Filtrar disciplinas vazias
+                todasDisciplinas = todasDisciplinas.filter(d => d.turmas && d.turmas.length > 0);
+
+                atualizarUltimaAtualizacao();
+                definirStatus('sucesso');
+                renderizar();
+            } catch (erro) {
+                console.error('Erro ao carregar:', erro);
+                definirStatus('erro');
+                mostrarAlerta(erro.message);
+            }
+        }
+
+        async function buscarListaDisciplinas() {
+            const url = CONFIGURACAO.PROXY_CORS + encodeURIComponent(CONFIGURACAO.URL_LISTA_DISCIPLINAS);
+            const resposta = await fetch(url);
+            if (!resposta.ok) throw new Error(`Erro ao buscar disciplinas: ${resposta.status}`);
+            return await resposta.text();
+        }
+
+        function extrairCodigosDisciplinas(html) {
+            const regex = /PNV\d{4}/g;
+            const codigos = html.match(regex) || [];
+            return [...new Set(codigos)]; // Remove duplicatas
+        }
+
+        async function buscarDetalhesDiscip(codigoDiscip) {
+            try {
+                const url = CONFIGURACAO.PROXY_CORS + encodeURIComponent(CONFIGURACAO.URL_DETALHES_TURMA + codigoDiscip);
+                const resposta = await fetch(url, { timeout: 10000 });
+                if (!resposta.ok) throw new Error(`Erro ao buscar: ${resposta.status}`);
+                const html = await resposta.text();
+
+                const discip = {
+                    codigo: codigoDiscip,
+                    nome: extrairNomeDiscip(html),
+                    turmas: extrairDetalhesTormas(html)
+                };
+
+                return discip;
+            } catch (erro) {
+                console.error(`Erro ao buscar ${codigoDiscip}:`, erro);
+                return { codigo: codigoDiscip, nome: 'Erro ao carregar', turmas: [] };
+            }
+        }
+
+        function extrairNomeDiscip(html) {
+            const mapa = html.match(/<h\d[^>]*>([^<]*PNV[^<]*)<\/h\d>/i) ||
+                        html.match(/PROGRAMA\s*:\s*([^<]+)/i);
+            return mapa ? mapa[1].trim() : 'Disciplina';
+        }
+
+        function extrairDetalhesTormas(html) {
+            const turmas = [];
+            
+            // Procurar por linhas de tabela com informações de turma
+            const regexLinhas = /<tr[^>]*>[\s\S]*?<\/tr>/gi;
+            const correspondencias = html.match(regexLinhas) || [];
+
+            correspondencias.forEach((linha, indice) => {
+                // Pular linhas de cabeçalho
+                if (indice === 0 || linha.includes('th')) return;
+
+                const turma = {
+                    codigo: extrairTextoTD(linha, 0) || `T${indice}`,
+                    horario: extrairTextoTD(linha, 2) || '--:-- a --:--',
+                    dia: extrairTextoTD(linha, 1) || 'N/A',
+                    ocupadas: 0,
+                    total: 0
+                };
+
+                // Extrair informações de vagas (formato: ocupadas/total)
+                const regexVagas = /(\d+)\s*\/\s*(\d+)/;
+                const linhaTexto = linha.replace(/<[^>]+>/g, ' ');
+                const matchVagas = linhaTexto.match(regexVagas);
+                
+                if (matchVagas) {
+                    turma.ocupadas = parseInt(matchVagas[1]);
+                    turma.total = parseInt(matchVagas[2]);
+                }
+
+                if (turma.total > 0) {
+                    turmas.push(turma);
+                }
+            });
+
+            return turmas;
+        }
+
+        function extrairTextoTD(html, indice) {
+            const tds = html.match(/<td[^>]*>([^<]*)<\/td>/gi) || [];
+            if (tds[indice]) {
+                return tds[indice].replace(/<[^>]+>/g, '').trim();
+            }
+            return null;
+        }
+
+        function calcularStatus(turma) {
+            if (turma.total === 0) return 'desconhecido';
+            const ocupacao = turma.ocupadas / turma.total;
+            if (ocupacao >= 1) return 'lotado';
+            if (ocupacao >= 0.8) return 'poucos';
+            return 'disponivel';
+        }
+
+        function filtrarDisciplinas() {
+            if (filtroAtual === 'todos') return todasDisciplinas;
+
+            return todasDisciplinas.filter(discip => {
+                return discip.turmas.some(turma => {
+                    const status = calcularStatus(turma);
+                    switch (filtroAtual) {
+                        case 'disponiveis': return status === 'disponivel';
+                        case 'poucos': return status === 'poucos';
+                        case 'lotadas': return status === 'lotado';
+                        default: return true;
+                    }
+                });
+            });
+        }
+
+        function renderizar() {
+            const conteudo = document.getElementById('conteudo');
+            const filtradas = filtrarDisciplinas();
+
+            if (filtradas.length === 0) {
+                conteudo.innerHTML = '<div class="sem-resultados">📭 Nenhuma disciplina encontrada com os critérios selecionados</div>';
+                return;
+            }
+
+            const html = filtradas.map(discip => `
+                <div class="carta-disciplina">
+                    <div class="cabecalho-disciplina">
+                        <div class="codigo-disciplina">${discip.codigo}</div>
+                        <div class="nome-disciplina">${discip.nome}</div>
+                    </div>
+                    <div class="turmas">
+                        ${discip.turmas.map(turma => {
+                            const status = calcularStatus(turma);
+                            const percentual = turma.total > 0 ? (turma.ocupadas / turma.total) * 100 : 0;
+                            return `
+                                <div class="item-turma">
+                                    <div class="horario-turma">
+                                        ${turma.dia} - ${turma.horario}
+                                    </div>
+                                    <div class="codigo-turma">
+                                        Turma: ${turma.codigo}
+                                    </div>
+                                    <div class="barra-vagas">
+                                        <div class="preenchimento ${status === 'poucos' ? 'poucos' : status === 'lotado' ? 'lotado' : ''}" 
+                                             style="width: ${percentual}%"></div>
+                                    </div>
+                                    <div class="info-vagas">
+                                        <span>${turma.ocupadas} / ${turma.total} vagas</span>
+                                        <span>${Math.round(percentual)}%</span>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `).join('');
+
+            conteudo.innerHTML = `<div class="grid-disciplinas">${html}</div>`;
+        }
+
+        function definirStatus(status) {
+            const indicador = document.getElementById('indicadorStatus');
+            indicador.className = 'status-dot';
+            
+            switch (status) {
+                case 'carregando':
+                    indicador.classList.add('carregando');
+                    break;
+                case 'erro':
+                    indicador.classList.add('erro');
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        function atualizarUltimaAtualizacao() {
+            const agora = new Date();
+            const hora = agora.toLocaleTimeString('pt-BR');
+            document.getElementById('ultimaAtualizacao').textContent = hora;
+        }
+
+        function mostrarAlerta(mensagem) {
+            const container = document.getElementById('containerAlertas');
+            container.innerHTML = `
+                <div class="alerta">
+                    <div class="alerta-icone">⚠️</div>
+                    <div>${mensagem}</div>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
