@@ -451,124 +451,183 @@
         </div>
     </div>
 
-    <script>
+        <script>
+        /*
+         * Versão corrigida:
+         * - a lista de códigos está embutida, portanto não depende de codigos-pnv.json;
+         * - erros e progresso aparecem na tela, sem spinner infinito;
+         * - usa cache local imediatamente, quando disponível;
+         * - reduz o número de consultas paralelas e tenta mais de um proxy CORS;
+         * - registra falhas no Console (F12) sem interromper o restante do scan.
+         */
         const CONFIGURACAO = {
-            URL_CODIGOS_JSON: 'codigos-pnv.json',
+            CODIGOS_PNV: [
+            "PNV2616",
+            "PNV3645",
+            "PNV1211",
+            "PNV3314",
+            "PNV3414",
+            "PNV3523",
+            "PNV3621",
+            "PNV2500",
+            "PNV3514",
+            "PNV3522",
+            "PNV3324",
+            "PNV1221",
+            "PNV3647",
+            "PNV3323",
+            "PNV3413",
+            "PNV1222",
+            "PNV3315",
+            "PNV3416",
+            "PNV3646",
+            "PNV1120",
+            "PNV3210",
+            "PNV3426",
+            "PNV3100",
+            "PNV3642",
+            "PNV3391",
+            "PNV3392",
+            "PNV3643",
+            "PNV3322",
+            "PNV3412",
+            "PNV3212",
+            "PNV3222",
+            "PNV2441",
+            "PNV3321",
+            "PNV3641",
+            "PNV3511",
+            "PNV3512",
+            "PNV3513",
+            "PNV1560",
+            "PNV3631",
+            "PNV2611",
+            "PNV3421",
+            "PNV3395",
+            "PNV3396",
+            "PNV2511",
+            "PNV2512",
+            "PNV3415",
+            "PNV3516",
+            "PNV3526",
+            "PNV2613",
+            "PNV3425",
+            "PNV2411",
+            "PNV3644",
+            "PNV3517",
+            "PNV2587",
+            "PNV3521",
+            "PNV3510",
+            "PNV3520",
+            "PNV3411"
+],
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
-            INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,    // 5 minutos
-            INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000, // 15 dias
-            PROXY_CORS: 'https://api.allorigins.win/raw?url=',
+            INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,
+            INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000,
+            LIMITE_PARALELO: 5,
+            TIMEOUT_REQUISICAO: 10000,
+            PROXIES_CORS: [
+                url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+                url => `https://corsproxy.io/?${encodeURIComponent(url)}`
+            ]
         };
 
         let todasDisciplinas = [];
         let filtroAtual = 'todos';
         let proximoUpdate = 0;
 
-        // ===== GERENCIAMENTO DE CACHE E PERSISTÊNCIA =====
         class CacheManager {
             static async salvarDisciplinas(disciplinas) {
                 const metadata = {
                     timestamp: Date.now(),
+                    ultimaAtualizacaoLeve: Date.now(),
                     quantidade: disciplinas.length,
                     tipo: 'scan_completo'
                 };
-                
+
                 try {
-                    localStorage.setItem('pnv_disciplinas_v2', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v2', JSON.stringify(metadata));
-                } catch (e) {
-                    console.error('Erro ao salvar cache:', e);
+                    localStorage.setItem('pnv_disciplinas_v3', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v3', JSON.stringify(metadata));
+                } catch (erro) {
+                    console.error('Erro ao salvar cache:', erro);
                 }
             }
 
             static async salvarAtualizacaoLeve(disciplinas) {
-                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v2') || '{}');
+                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v3') || '{}');
                 metadata.ultimaAtualizacaoLeve = Date.now();
+                metadata.timestamp = metadata.timestamp || Date.now();
+                metadata.quantidade = disciplinas.length;
                 metadata.tipo = metadata.tipo || 'cache';
-                
+
                 try {
-                    localStorage.setItem('pnv_disciplinas_v2', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v2', JSON.stringify(metadata));
-                } catch (e) {
-                    console.error('Erro ao salvar atualização:', e);
+                    localStorage.setItem('pnv_disciplinas_v3', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v3', JSON.stringify(metadata));
+                } catch (erro) {
+                    console.error('Erro ao salvar atualização:', erro);
                 }
             }
 
             static async carregarDisciplinas() {
                 try {
-                    const dados = localStorage.getItem('pnv_disciplinas_v2');
+                    const dados = localStorage.getItem('pnv_disciplinas_v3');
                     return dados ? JSON.parse(dados) : null;
-                } catch (e) {
-                    console.error('Erro ao carregar cache:', e);
+                } catch (erro) {
+                    console.error('Erro ao carregar cache:', erro);
                     return null;
                 }
             }
 
             static async obterMetadata() {
                 try {
-                    const dados = localStorage.getItem('pnv_metadata_v2');
+                    const dados = localStorage.getItem('pnv_metadata_v3');
                     return dados ? JSON.parse(dados) : null;
-                } catch (e) {
+                } catch (erro) {
                     return null;
                 }
             }
 
             static async deveFazerScanCompleto() {
                 const metadata = await this.obterMetadata();
-                if (!metadata) return true;
-
-                const agora = Date.now();
-                const tempoDecorrido = agora - metadata.timestamp;
-                return tempoDecorrido >= CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
+                if (!metadata || !metadata.timestamp) return true;
+                return Date.now() - metadata.timestamp >= CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
             }
 
             static async tempoAteProximoScan() {
                 const metadata = await this.obterMetadata();
-                if (!metadata) return 0;
-
-                const proximoScan = metadata.timestamp + CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
-                const agora = Date.now();
-                return Math.max(0, proximoScan - agora);
+                if (!metadata || !metadata.timestamp) return 0;
+                return Math.max(0, metadata.timestamp + CONFIGURACAO.INTERVALO_SCAN_COMPLETO - Date.now());
             }
 
             static async tempoAteProximaAtualizacao() {
                 const metadata = await this.obterMetadata();
-                if (!metadata || !metadata.ultimaAtualizacaoLeve) {
-                    return CONFIGURACAO.INTERVALO_ATUALIZACAO_LEVE;
-                }
-
-                const proximaAtualizacao = metadata.ultimaAtualizacaoLeve + CONFIGURACAO.INTERVALO_ATUALIZACAO_LEVE;
-                const agora = Date.now();
-                return Math.max(0, proximaAtualizacao - agora);
+                if (!metadata || !metadata.ultimaAtualizacaoLeve) return 0;
+                return Math.max(0, metadata.ultimaAtualizacaoLeve + CONFIGURACAO.INTERVALO_ATUALIZACAO_LEVE - Date.now());
             }
         }
 
-        // ===== SISTEMA DE FUNDO - EXECUTA INDEPENDENTEMENTE =====
         class SistemaFundo {
-            static executando = {
-                scanCompleto: false,
-                atualizacaoLeve: false
-            };
+            static executando = { scanCompleto: false, atualizacaoLeve: false };
+            static agendamentoAtivo = false;
 
             static async iniciar() {
-                console.log('🚀 Sistema de fundo iniciado');
-                
-                // Executar primeira ação apropriada
+                console.log('Sistema de fundo iniciado');
                 const deveScan = await CacheManager.deveFazerScanCompleto();
                 const tempoAteProx = await CacheManager.tempoAteProximaAtualizacao();
-                
+
                 if (deveScan) {
                     await this.executarScanCompleto();
                 } else if (tempoAteProx <= 0) {
                     await this.executarAtualizacaoLeve();
                 }
 
-                // Agendar próxima ação
                 this.agendarProximaAcao();
             }
 
             static agendarProximaAcao() {
-                // Verificar a cada 1 minuto qual ação executar
+                if (this.agendamentoAtivo) return;
+                this.agendamentoAtivo = true;
+
                 setInterval(async () => {
                     const deveScan = await CacheManager.deveFazerScanCompleto();
                     const tempoAteProxAtu = await CacheManager.tempoAteProximaAtualizacao();
@@ -578,210 +637,239 @@
                     } else if (tempoAteProxAtu <= 0 && !this.executando.atualizacaoLeve) {
                         await this.executarAtualizacaoLeve();
                     }
-                }, 60000); // Verificar a cada minuto
+                }, 60000);
             }
 
             static async executarScanCompleto() {
                 if (this.executando.scanCompleto) return;
-                
+
                 this.executando.scanCompleto = true;
-                console.log('📊 Iniciando scan completo em background...');
+                limparAlertas();
                 definirStatus('carregando');
 
                 try {
-                    // Carregar lista de códigos PNV do arquivo JSON
-                    const codigosPNV = await carregarCodigosPNV();
-                    
-                    if (!codigosPNV || codigosPNV.length === 0) {
-                        throw new Error('Nenhuma disciplina PNV encontrada no arquivo de configuração');
-                    }
+                    const codigosPNV = CONFIGURACAO.CODIGOS_PNV;
+                    mostrarCarregando(`Preparando consulta de ${codigosPNV.length} disciplinas PNV...`);
+                    atualizarContador('⏳ Iniciando consulta...');
 
-                    mostrarCarregando(`🔄 Escaneando ${codigosPNV.length} disciplinas PNV...`);
-                    
-                    const disciplinas = await buscarDisciplinasComLimite(codigosPNV, false);
-                    todasDisciplinas = disciplinas.filter(d => d.turmas && d.turmas.length > 0);
+                    const resultado = await buscarDisciplinasComLimite(codigosPNV, {
+                        aoProgredir: (concluidas, total, encontradas, falhas) => {
+                            mostrarCarregando(`Consultando disciplinas: ${concluidas}/${total}. Com turmas encontradas: ${encontradas}. Falhas: ${falhas}.`);
+                            atualizarContador(`⏳ ${concluidas}/${total} consultadas — ${encontradas} com turmas`);
+                        }
+                    });
 
+                    todasDisciplinas = resultado.disciplinas.filter(d => d.turmas && d.turmas.length > 0);
                     await CacheManager.salvarDisciplinas(todasDisciplinas);
-                    
-                    console.log(`✅ Scan completo concluído: ${todasDisciplinas.length} disciplinas`);
+
                     atualizarUltimaAtualizacao();
                     definirStatus('sucesso');
                     renderizar();
-                    atualizarContador();
+                    atualizarContador(`✅ ${todasDisciplinas.length} disciplina(s) com turma(s) encontradas`);
+
+                    if (resultado.falhas > 0) {
+                        mostrarAlerta(`A consulta terminou, mas ${resultado.falhas} disciplina(s) não responderam. Use “Atualizar Agora” mais tarde para tentar novamente.`);
+                    }
                 } catch (erro) {
                     console.error('Erro ao fazer scan completo:', erro);
                     definirStatus('erro');
-                    mostrarAlerta('Erro ao escanear: ' + erro.message);
+                    exibirErroNaTela('Não foi possível iniciar a consulta', erro);
                 } finally {
                     this.executando.scanCompleto = false;
                 }
             }
 
             static async executarAtualizacaoLeve() {
-                if (this.executando.atualizacaoLeve || todasDisciplinas.length === 0) return;
-                
+                if (this.executando.atualizacaoLeve) return;
+                if (todasDisciplinas.length === 0) {
+                    return this.executarScanCompleto();
+                }
+
                 this.executando.atualizacaoLeve = true;
-                console.log('🔄 Iniciando atualização leve em background...');
+                limparAlertas();
                 definirStatus('carregando');
 
                 try {
-                    const codigosDisciplinas = todasDisciplinas.map(d => d.codigo);
-                    const atualizados = await buscarDisciplinasComLimite(codigosDisciplinas, true);
+                    const codigos = todasDisciplinas.map(d => d.codigo);
+                    const resultado = await buscarDisciplinasComLimite(codigos, {
+                        aoProgredir: (concluidas, total, encontradas, falhas) => {
+                            atualizarContador(`⏳ Atualizando ${concluidas}/${total} — falhas: ${falhas}`);
+                        }
+                    });
 
-                    atualizados.forEach(disciplinaAtualizada => {
-                        const indice = todasDisciplinas.findIndex(d => d.codigo === disciplinaAtualizada.codigo);
-                        if (indice !== -1) {
-                            todasDisciplinas[indice].turmas = disciplinaAtualizada.turmas;
+                    resultado.disciplinas.forEach(atualizada => {
+                        const indice = todasDisciplinas.findIndex(d => d.codigo === atualizada.codigo);
+                        if (indice >= 0) {
+                            todasDisciplinas[indice] = atualizada;
                         }
                     });
 
                     await CacheManager.salvarAtualizacaoLeve(todasDisciplinas);
-                    
-                    console.log('✅ Atualização leve concluída');
                     atualizarUltimaAtualizacao();
                     definirStatus('sucesso');
                     renderizar();
+                    atualizarContador(`✅ ${todasDisciplinas.length} disciplina(s) com turma(s) no cache`);
+
+                    if (resultado.falhas > 0) {
+                        mostrarAlerta(`${resultado.falhas} disciplina(s) não responderam nesta atualização. Os dados anteriores foram mantidos.`);
+                    }
                 } catch (erro) {
                     console.error('Erro ao atualizar:', erro);
                     definirStatus('erro');
+                    exibirErroNaTela('Não foi possível atualizar os dados', erro, true);
                 } finally {
                     this.executando.atualizacaoLeve = false;
                 }
             }
         }
 
-        // ===== FUNÇÕES PRINCIPAIS =====
-        async function carregarCodigosPNV() {
-            try {
-                console.log('📋 Carregando lista de disciplinas PNV...');
-                const resposta = await fetch(CONFIGURACAO.URL_CODIGOS_JSON);
-                
-                if (!resposta.ok) {
-                    throw new Error('Arquivo codigos-pnv.json não encontrado');
-                }
-                
-                const dados = await resposta.json();
-                const codigos = dados.codigos || [];
-                
-                console.log(`✅ Carregadas ${codigos.length} disciplinas PNV`);
-                return codigos;
-            } catch (erro) {
-                console.error('Erro ao carregar códigos:', erro);
-                throw new Error('Falha ao carregar lista de disciplinas: ' + erro.message);
-            }
-        }
-
-        async function buscarDisciplinasComLimite(codigos, atualizacaoLeve = false) {
+        async function buscarDisciplinasComLimite(codigos, { aoProgredir } = {}) {
             const disciplinas = [];
-            const limiteParalelo = 10;
-            
-            for (let i = 0; i < codigos.length; i += limiteParalelo) {
-                const lote = codigos.slice(i, i + limiteParalelo);
-                const resultados = await Promise.allSettled(
-                    lote.map(codigo => buscarDetalhesDiscip(codigo))
-                );
-                
+            let concluidas = 0;
+            let falhas = 0;
+
+            for (let i = 0; i < codigos.length; i += CONFIGURACAO.LIMITE_PARALELO) {
+                const lote = codigos.slice(i, i + CONFIGURACAO.LIMITE_PARALELO);
+                const resultados = await Promise.allSettled(lote.map(buscarDetalhesDiscip));
+
                 resultados.forEach(resultado => {
+                    concluidas += 1;
                     if (resultado.status === 'fulfilled' && resultado.value) {
                         disciplinas.push(resultado.value);
+                    } else {
+                        falhas += 1;
+                        if (resultado.status === 'rejected') console.error('Falha na consulta:', resultado.reason);
                     }
                 });
 
-                // Atualizar feedback (opcional para atualizações leves)
-                if (i % 50 === 0) {
-                    console.log(`Progresso: ${Math.min(i + limiteParalelo, codigos.length)}/${codigos.length}`);
-                }
+                aoProgredir?.(concluidas, codigos.length, disciplinas.length, falhas);
             }
 
-            return disciplinas;
+            return { disciplinas, falhas };
         }
 
         async function buscarDetalhesDiscip(codigoDiscip) {
+            const urlAlvo = CONFIGURACAO.URL_DETALHES_TURMA + encodeURIComponent(codigoDiscip);
+            let ultimoErro = null;
+
+            for (const montarUrlProxy of CONFIGURACAO.PROXIES_CORS) {
+                try {
+                    const html = await buscarTextoComTimeout(montarUrlProxy(urlAlvo));
+                    if (!html || html.length < 100) {
+                        throw new Error('Resposta vazia ou incompleta');
+                    }
+
+                    if (/Nenhum registro encontrado|nenhum registro/i.test(html)) return null;
+
+                    const turmas = extrairDetalhesTurmas(html);
+                    if (turmas.length === 0) return null;
+
+                    return {
+                        codigo: codigoDiscip,
+                        nome: extrairNomeDiscip(html, codigoDiscip),
+                        turmas
+                    };
+                } catch (erro) {
+                    ultimoErro = erro;
+                }
+            }
+
+            console.warn(`Falha ao consultar ${codigoDiscip}:`, ultimoErro?.message || ultimoErro);
+            throw new Error(`${codigoDiscip}: ${ultimoErro?.message || 'não foi possível consultar o Júpiter'}`);
+        }
+
+        async function buscarTextoComTimeout(url) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), CONFIGURACAO.TIMEOUT_REQUISICAO);
+
             try {
-                const url = CONFIGURACAO.PROXY_CORS + encodeURIComponent(CONFIGURACAO.URL_DETALHES_TURMA + codigoDiscip);
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-                const resposta = await fetch(url, { signal: controller.signal });
-                clearTimeout(timeoutId);
-
-                if (!resposta.ok) return null;
-                
-                const html = await resposta.text();
-
-                if (!html || html.length < 100 || html.includes('Nenhum registro encontrado') || html.includes('nenhum registro')) {
-                    return null;
-                }
-
-                const turmas = extrairDetalhesTormas(html);
-                
-                if (turmas.length === 0) {
-                    return null;
-                }
-
-                const discip = {
-                    codigo: codigoDiscip,
-                    nome: extrairNomeDiscip(html),
-                    turmas: turmas
-                };
-
-                return discip;
-            } catch (erro) {
-                return null;
+                const resposta = await fetch(url, {
+                    signal: controller.signal,
+                    cache: 'no-store'
+                });
+                if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+                return await resposta.text();
+            } finally {
+                clearTimeout(timeout);
             }
         }
 
-        function extrairNomeDiscip(html) {
-            const mapa = html.match(/<h\d[^>]*>([^<]*PNV[^<]*)<\/h\d>/i) ||
-                        html.match(/PROGRAMA\s*[:=]\s*([^<]+)/i) ||
-                        html.match(/<title[^>]*>([^<]+)<\/title>/i);
-            return mapa ? mapa[1].trim() : 'Disciplina';
+        function normalizarTexto(valor) {
+            return (valor || '').replace(/\s+/g, ' ').trim();
         }
 
-        function extrairDetalhesTormas(html) {
+        function extrairNomeDiscip(html, codigo) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const titulo = normalizarTexto(doc.querySelector('title')?.textContent);
+            const cabecalhos = Array.from(doc.querySelectorAll('h1,h2,h3,h4,strong,b')).map(el => normalizarTexto(el.textContent));
+            const candidato = cabecalhos.find(texto => texto.includes(codigo)) || titulo;
+            return candidato || 'Disciplina';
+        }
+
+        function extrairDetalhesTurmas(html) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
             const turmas = [];
-            
-            const regexLinhas = /<tr[^>]*>[\s\S]*?<\/tr>/gi;
-            const correspondencias = html.match(regexLinhas) || [];
+            const vistos = new Set();
 
-            correspondencias.forEach((linha, indice) => {
-                if (indice === 0 || linha.includes('th')) return;
+            for (const tabela of doc.querySelectorAll('table')) {
+                const linhas = Array.from(tabela.querySelectorAll('tr'));
+                if (linhas.length < 2) continue;
 
-                const turma = {
-                    codigo: extrairTextoTD(linha, 0) || `T${indice}`,
-                    horario: extrairTextoTD(linha, 2) || '--:-- a --:--',
-                    dia: extrairTextoTD(linha, 1) || 'N/A',
-                    ocupadas: 0,
-                    total: 0
-                };
+                const cabecalho = Array.from(linhas[0].querySelectorAll('th,td')).map(celula => normalizarTexto(celula.textContent).toLowerCase());
+                const indiceTurma = encontrarIndice(cabecalho, /turma|c[oó]digo/);
+                const indiceHorario = encontrarIndice(cabecalho, /hor[aá]rio/);
+                const indiceDia = encontrarIndice(cabecalho, /dia/);
+                const indiceVagas = encontrarIndice(cabecalho, /vaga/);
 
-                const regexVagas = /(\d+)\s*\/\s*(\d+)/;
-                const linhaTexto = linha.replace(/<[^>]+>/g, ' ');
-                const matchVagas = linhaTexto.match(regexVagas);
-                
-                if (matchVagas) {
-                    turma.ocupadas = parseInt(matchVagas[1]);
-                    turma.total = parseInt(matchVagas[2]);
+                for (const linha of linhas.slice(1)) {
+                    const celulas = Array.from(linha.querySelectorAll('td,th')).map(celula => normalizarTexto(celula.textContent));
+                    if (celulas.length === 0) continue;
+
+                    const textoLinha = normalizarTexto(celulas.join(' | '));
+                    const vagas = extrairVagas(textoLinha, indiceVagas >= 0 ? celulas[indiceVagas] : '');
+                    if (!vagas || vagas.total <= 0) continue;
+
+                    const codigo = indiceTurma >= 0 ? celulas[indiceTurma] : celulas[0];
+                    const horario = indiceHorario >= 0 ? celulas[indiceHorario] : buscarPorPadrao(celulas, /\d{1,2}:\d{2}/) || '--';
+                    const dia = indiceDia >= 0 ? celulas[indiceDia] : buscarPorPadrao(celulas, /segunda|terça|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo/i) || '--';
+                    const chave = `${codigo}|${dia}|${horario}|${vagas.ocupadas}|${vagas.total}`;
+
+                    if (!vistos.has(chave)) {
+                        vistos.add(chave);
+                        turmas.push({ codigo: codigo || '—', horario: horario || '—', dia: dia || '—', ...vagas });
+                    }
                 }
-
-                if (turma.total > 0) {
-                    turmas.push(turma);
-                }
-            });
+            }
 
             return turmas;
         }
 
-        function extrairTextoTD(html, indice) {
-            const tds = html.match(/<td[^>]*>([^<]*)<\/td>/gi) || [];
-            if (tds[indice]) {
-                return tds[indice].replace(/<[^>]+>/g, '').trim();
+        function encontrarIndice(cabecalhos, padrao) {
+            return cabecalhos.findIndex(cabecalho => padrao.test(cabecalho));
+        }
+
+        function buscarPorPadrao(valores, padrao) {
+            return valores.find(valor => padrao.test(valor)) || '';
+        }
+
+        function extrairVagas(textoLinha, celulaVagas) {
+            const fontes = [celulaVagas, textoLinha].filter(Boolean);
+            for (const fonte of fontes) {
+                const relacao = fonte.match(/(\d+)\s*\/\s*(\d+)/);
+                if (relacao) return { ocupadas: Number(relacao[1]), total: Number(relacao[2]) };
+
+                const de = fonte.match(/(\d+)\s*(?:de|em)\s*(\d+)/i);
+                if (de) return { ocupadas: Number(de[1]), total: Number(de[2]) };
+
+                const total = fonte.match(/(?:total|vagas?)\s*[:=-]?\s*(\d+)/i);
+                const ocupadas = textoLinha.match(/(?:ocupadas?|inscritos?)\s*[:=-]?\s*(\d+)/i);
+                if (total && ocupadas) return { ocupadas: Number(ocupadas[1]), total: Number(total[1]) };
             }
             return null;
         }
 
         function calcularStatus(turma) {
-            if (turma.total === 0) return 'desconhecido';
+            if (!turma.total) return 'desconhecido';
             const ocupacao = turma.ocupadas / turma.total;
             if (ocupacao >= 1) return 'lotado';
             if (ocupacao >= 0.8) return 'poucos';
@@ -790,24 +878,16 @@
 
         function filtrarDisciplinas() {
             if (filtroAtual === 'todos') return todasDisciplinas;
-
-            return todasDisciplinas.filter(discip => {
-                return discip.turmas.some(turma => {
-                    const status = calcularStatus(turma);
-                    switch (filtroAtual) {
-                        case 'disponiveis': return status === 'disponivel';
-                        case 'poucos': return status === 'poucos';
-                        case 'lotadas': return status === 'lotado';
-                        default: return true;
-                    }
-                });
-            });
+            return todasDisciplinas.filter(disciplina => disciplina.turmas.some(turma => {
+                const status = calcularStatus(turma);
+                return status === (filtroAtual === 'disponiveis' ? 'disponivel' : filtroAtual === 'poucos' ? 'poucos' : 'lotado');
+            }));
         }
 
-        function definirFiltro(filtro) {
+        function definirFiltro(filtro, botao) {
             filtroAtual = filtro;
-            document.querySelectorAll('.btn-filtro').forEach(btn => btn.classList.remove('ativo'));
-            event.target.classList.add('ativo');
+            document.querySelectorAll('.btn-filtro').forEach(item => item.classList.remove('ativo'));
+            (botao || document.querySelector(`.btn-filtro[onclick*="'${filtro}'"]`))?.classList.add('ativo');
             renderizar();
         }
 
@@ -820,67 +900,68 @@
                 return;
             }
 
-            const html = filtradas.map(discip => `
+            const html = filtradas.map(disciplina => `
                 <div class="carta-disciplina">
                     <div class="cabecalho-disciplina">
-                        <div class="codigo-disciplina">${discip.codigo}</div>
-                        <div class="nome-disciplina">${discip.nome}</div>
+                        <div class="codigo-disciplina">${escaparHtml(disciplina.codigo)}</div>
+                        <div class="nome-disciplina">${escaparHtml(disciplina.nome)}</div>
                     </div>
                     <div class="turmas">
-                        ${discip.turmas.map(turma => {
+                        ${disciplina.turmas.map(turma => {
                             const status = calcularStatus(turma);
-                            const percentual = turma.total > 0 ? (turma.ocupadas / turma.total) * 100 : 0;
+                            const percentual = turma.total ? Math.min(100, (turma.ocupadas / turma.total) * 100) : 0;
                             return `
                                 <div class="item-turma">
-                                    <div class="horario-turma">
-                                        ${turma.dia} - ${turma.horario}
-                                    </div>
-                                    <div class="codigo-turma">
-                                        Turma: ${turma.codigo}
-                                    </div>
-                                    <div class="barra-vagas">
-                                        <div class="preenchimento ${status === 'poucos' ? 'poucos' : status === 'lotado' ? 'lotado' : ''}" 
-                                             style="width: ${percentual}%"></div>
-                                    </div>
-                                    <div class="info-vagas">
-                                        <span>${turma.ocupadas} / ${turma.total} vagas</span>
-                                        <span>${Math.round(percentual)}%</span>
-                                    </div>
-                                </div>
-                            `;
+                                    <div class="horario-turma">${escaparHtml(turma.dia)} — ${escaparHtml(turma.horario)}</div>
+                                    <div class="codigo-turma">Turma: ${escaparHtml(turma.codigo)}</div>
+                                    <div class="barra-vagas"><div class="preenchimento ${status === 'poucos' ? 'poucos' : status === 'lotado' ? 'lotado' : ''}" style="width: ${percentual}%"></div></div>
+                                    <div class="info-vagas"><span>${turma.ocupadas} / ${turma.total} vagas</span><span>${Math.round(percentual)}%</span></div>
+                                </div>`;
                         }).join('')}
                     </div>
-                </div>
-            `).join('');
+                </div>`).join('');
 
             conteudo.innerHTML = `<div class="grid-disciplinas">${html}</div>`;
         }
 
-        async function iniciarContagemRegressiva() {
+        function escaparHtml(valor) {
+            const div = document.createElement('div');
+            div.textContent = String(valor ?? '');
+            return div.innerHTML;
+        }
+
+        function iniciarContagemRegressiva() {
             setInterval(async () => {
                 const tempoProxAtu = await CacheManager.tempoAteProximaAtualizacao();
                 const tempoProxScan = await CacheManager.tempoAteProximoScan();
+                const alvo = document.getElementById('proximaAtualizacao');
 
                 if (tempoProxAtu > 0) {
                     const minutos = Math.floor(tempoProxAtu / 60000);
                     const segundos = Math.floor((tempoProxAtu % 60000) / 1000);
-                    const texto = minutos > 0 ? `${minutos}m ${segundos}s (atualização)` : `${segundos}s (atualização)`;
-                    document.getElementById('proximaAtualizacao').textContent = texto;
+                    alvo.textContent = minutos > 0 ? `${minutos}m ${segundos}s (atualização)` : `${segundos}s (atualização)`;
                 } else if (tempoProxScan > 0) {
-                    const dias = Math.floor(tempoProxScan / (24 * 60 * 60 * 1000));
-                    const horas = Math.floor((tempoProxScan % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-                    document.getElementById('proximaAtualizacao').textContent = `${dias}d ${horas}h (scan)`;
+                    const dias = Math.floor(tempoProxScan / 86400000);
+                    const horas = Math.floor((tempoProxScan % 86400000) / 3600000);
+                    alvo.textContent = `${dias}d ${horas}h (scan)`;
+                } else {
+                    alvo.textContent = 'agora';
                 }
             }, 1000);
         }
 
         async function forcarAtualizacao() {
             const botao = document.getElementById('botaoAtualizar');
+            if (SistemaFundo.executando.scanCompleto || SistemaFundo.executando.atualizacaoLeve) return;
+
             botao.disabled = true;
             botao.textContent = '⏳ Carregando...';
-            
             try {
-                await SistemaFundo.executarAtualizacaoLeve();
+                if (todasDisciplinas.length === 0) {
+                    await SistemaFundo.executarScanCompleto();
+                } else {
+                    await SistemaFundo.executarAtualizacaoLeve();
+                }
             } finally {
                 botao.disabled = false;
                 botao.textContent = '🔄 Atualizar Agora';
@@ -890,74 +971,59 @@
         function definirStatus(status) {
             const indicador = document.getElementById('indicadorStatus');
             indicador.className = 'status-dot';
-            
-            switch (status) {
-                case 'carregando':
-                    indicador.classList.add('carregando');
-                    break;
-                case 'erro':
-                    indicador.classList.add('erro');
-                    break;
-                default:
-                    break;
-            }
+            if (status === 'carregando') indicador.classList.add('carregando');
+            if (status === 'erro') indicador.classList.add('erro');
         }
 
         function atualizarUltimaAtualizacao() {
-            const agora = new Date();
-            const hora = agora.toLocaleTimeString('pt-BR');
-            document.getElementById('ultimaAtualizacao').textContent = hora;
+            document.getElementById('ultimaAtualizacao').textContent = new Date().toLocaleTimeString('pt-BR');
         }
 
-        function atualizarContador() {
-            document.getElementById('contadorDisciplinas').innerHTML = 
-                `✅ ${todasDisciplinas.length} disciplina(s) com vagas encontrada(s)`;
+        function atualizarContador(mensagem) {
+            document.getElementById('contadorDisciplinas').innerHTML = mensagem || `✅ ${todasDisciplinas.length} disciplina(s) com turma(s) encontrada(s)`;
         }
 
         function mostrarAlerta(mensagem) {
             const container = document.getElementById('containerAlertas');
-            container.innerHTML = `
-                <div class="alerta">
-                    <div class="alerta-icone">⚠️</div>
-                    <div>${mensagem}</div>
-                </div>
-            `;
+            container.innerHTML = `<div class="alerta"><div class="alerta-icone">⚠️</div><div>${escaparHtml(mensagem)}</div></div>`;
+        }
+
+        function limparAlertas() {
+            document.getElementById('containerAlertas').innerHTML = '';
         }
 
         function mostrarCarregando(mensagem) {
-            const conteudo = document.getElementById('conteudo');
-            conteudo.innerHTML = `
-                <div class="carregando">
-                    <div class="spinner"></div>
-                    <div class="texto-carregando">${mensagem}</div>
-                </div>
-            `;
+            document.getElementById('conteudo').innerHTML = `<div class="carregando"><div class="spinner"></div><div class="texto-carregando">${escaparHtml(mensagem)}</div></div>`;
         }
 
-        // ===== INICIALIZAÇÃO DA PÁGINA =====
+        function exibirErroNaTela(titulo, erro, manterDados = false) {
+            const detalhe = erro?.message || String(erro);
+            mostrarAlerta(`${titulo}: ${detalhe}`);
+            atualizarContador('❌ Erro na consulta — abra o Console (F12) para detalhes');
+            if (!manterDados || todasDisciplinas.length === 0) {
+                document.getElementById('conteudo').innerHTML = `<div class="sem-resultados">❌ ${escaparHtml(titulo)}.<br><small>${escaparHtml(detalhe)}</small></div>`;
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', async () => {
             try {
-                // Carregar dados do cache
                 const disciplinasCache = await CacheManager.carregarDisciplinas();
-                
-                if (disciplinasCache && disciplinasCache.length > 0) {
+                if (disciplinasCache?.length) {
                     todasDisciplinas = disciplinasCache;
                     renderizar();
                     atualizarContador();
                     atualizarUltimaAtualizacao();
                 } else {
                     mostrarCarregando('🔄 Carregando dados iniciais...');
+                    atualizarContador('🔄 Aguardando consulta inicial...');
                 }
 
-                // Inicializar sistema de fundo
-                SistemaFundo.iniciar();
-
-                // Atualizar contagem regressiva a cada segundo
                 iniciarContagemRegressiva();
-
+                await SistemaFundo.iniciar();
             } catch (erro) {
                 console.error('Erro ao inicializar:', erro);
-                mostrarAlerta('Erro ao inicializar: ' + erro.message);
+                definirStatus('erro');
+                exibirErroNaTela('Erro ao inicializar', erro);
             }
         });
     </script>
