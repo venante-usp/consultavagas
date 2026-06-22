@@ -44,6 +44,13 @@
             margin-bottom: 20px;
         }
 
+        .fonte-lista {
+            margin: 8px 0 0;
+            color: #666;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
         .header-controls {
             display: flex;
             justify-content: space-between;
@@ -451,7 +458,8 @@
         <!-- Cabeçalho -->
         <div class="header">
             <h1>📚 Monitor de Vagas - PNV</h1>
-            <p class="header-subtitle">Consulta de turmas e vagas por categoria no Júpiter. Dados em cache aparecem imediatamente; a primeira leitura é feita no Júpiter.</p>
+            <p class="header-subtitle">Consulta de turmas e vagas por categoria no Júpiter. A consulta completa também confere a lista atual de disciplinas PNV antes de buscar as turmas.</p>
+            <div class="fonte-lista" id="fonteLista">📋 Lista de disciplinas: ainda não sincronizada com o Júpiter.</div>
             
             <div class="header-controls">
                 <div class="status-info">
@@ -468,13 +476,13 @@
                         🔄 Atualizar disciplinas exibidas
                     </button>
                     <button class="btn btn-atualizar-tudo" id="botaoAtualizarTudo" onclick="forcarAtualizacaoTotal()"
-                            title="Consulta novamente todas as 58 disciplinas configuradas, inclusive as que não apareceram ou falharam antes."
-                            aria-label="Consultar novamente todas as 58 disciplinas">
-                        🔁 Consultar as 58 disciplinas
+                            title="Consulta a lista atual de códigos PNV no Júpiter e, em seguida, consulta as turmas de cada disciplina encontrada."
+                            aria-label="Consultar lista atual de disciplinas PNV no Júpiter">
+                        🔁 Consultar lista atual do Júpiter
                     </button>
                     <div class="explicacao-controles">
                         <strong>Atualizar disciplinas exibidas:</strong> consulta só o que já aparece abaixo. 
-                        <strong>Consultar as 58 disciplinas:</strong> refaz a consulta completa, inclusive das que falharam antes.
+                        <strong>Consultar lista atual do Júpiter:</strong> primeiro confere os códigos PNV atualmente listados pelo Júpiter e depois refaz a busca completa; disciplinas removidas da lista deixam de aparecer.
                     </div>
                 </div>
             </div>
@@ -512,7 +520,7 @@
 
         <!-- Rodapé -->
         <div class="rodape-info">
-            💡 Consulta acelerada com pool paralelo | Atualizações rápidas a cada 5 minutos | Dados salvos no navegador
+            💡 Atualização das disciplinas exibidas a cada 5 minutos | Lista oficial e consulta completa a cada 15 dias | Dados salvos no navegador
         </div>
     </div>
 
@@ -526,7 +534,8 @@
          * - registra falhas no Console (F12) sem interromper o restante do scan.
          */
         const CONFIGURACAO = {
-            CODIGOS_PNV: [
+            // Reserva usada apenas se a página oficial da lista ficar indisponível.
+            CODIGOS_PNV_RESERVA: [
             "PNV2616",
             "PNV3645",
             "PNV1211",
@@ -586,6 +595,7 @@
             "PNV3520",
             "PNV3411"
 ],
+            URL_LISTA_DISCIPLINAS: 'https://uspdigital.usp.br/jupiterweb/jupDisciplinaLista?codcg=3&pfxdisval=PNV&tipo=D',
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,
             INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000,
@@ -607,60 +617,80 @@
         let proximoUpdate = 0;
 
         class CacheManager {
-            static async salvarDisciplinas(disciplinas) {
+            static CHAVE_DISCIPLINAS = 'pnv_disciplinas_v10';
+            static CHAVE_METADATA = 'pnv_metadata_v10';
+            static CHAVE_DISCIPLINAS_ANTIGA = 'pnv_disciplinas_v7';
+            static CHAVE_METADATA_ANTIGA = 'pnv_metadata_v7';
+
+            static lerJson(chave) {
+                try {
+                    const dados = localStorage.getItem(chave);
+                    return dados ? JSON.parse(dados) : null;
+                } catch (erro) {
+                    console.error(`Erro ao ler ${chave}:`, erro);
+                    return null;
+                }
+            }
+
+            static async salvarDisciplinas(disciplinas, listaInfo = {}) {
+                const agora = Date.now();
                 const metadata = {
-                    timestamp: Date.now(),
-                    ultimaAtualizacaoLeve: Date.now(),
+                    timestamp: agora,
+                    ultimaAtualizacaoLeve: agora,
                     quantidade: disciplinas.length,
-                    tipo: 'scan_completo'
+                    tipo: 'scan_completo',
+                    codigosOficiais: Array.isArray(listaInfo.codigos) ? listaInfo.codigos : [],
+                    listaOficialSincronizadaEm: listaInfo.atualizadaEm || agora,
+                    origemLista: listaInfo.origem || 'lista não informada',
+                    listaEmModoReserva: Boolean(listaInfo.fallback)
                 };
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v7', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v7', JSON.stringify(metadata));
+                    localStorage.setItem(this.CHAVE_DISCIPLINAS, JSON.stringify(disciplinas));
+                    localStorage.setItem(this.CHAVE_METADATA, JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar cache:', erro);
                 }
             }
 
             static async salvarAtualizacaoLeve(disciplinas) {
-                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v7') || '{}');
+                const metadata = this.lerJson(this.CHAVE_METADATA) || {
+                    timestamp: Date.now(),
+                    codigosOficiais: [],
+                    origemLista: 'lista não informada',
+                    listaOficialSincronizadaEm: Date.now()
+                };
                 metadata.ultimaAtualizacaoLeve = Date.now();
                 metadata.timestamp = metadata.timestamp || Date.now();
                 metadata.quantidade = disciplinas.length;
                 metadata.tipo = metadata.tipo || 'cache';
 
                 try {
-                    localStorage.setItem('pnv_disciplinas_v7', JSON.stringify(disciplinas));
-                    localStorage.setItem('pnv_metadata_v7', JSON.stringify(metadata));
+                    localStorage.setItem(this.CHAVE_DISCIPLINAS, JSON.stringify(disciplinas));
+                    localStorage.setItem(this.CHAVE_METADATA, JSON.stringify(metadata));
                 } catch (erro) {
                     console.error('Erro ao salvar atualização:', erro);
                 }
             }
 
             static async carregarDisciplinas() {
-                try {
-                    const dados = localStorage.getItem('pnv_disciplinas_v7');
-                    return dados ? JSON.parse(dados) : null;
-                } catch (erro) {
-                    console.error('Erro ao carregar cache:', erro);
-                    return null;
-                }
+                return this.lerJson(this.CHAVE_DISCIPLINAS) || this.lerJson(this.CHAVE_DISCIPLINAS_ANTIGA);
             }
 
             static async obterMetadata() {
-                try {
-                    // Deve usar a mesma versão das chaves gravadas em salvarDisciplinas/salvarAtualizacaoLeve.
-                    const dados = localStorage.getItem('pnv_metadata_v7');
-                    return dados ? JSON.parse(dados) : null;
-                } catch (erro) {
-                    return null;
-                }
+                const atual = this.lerJson(this.CHAVE_METADATA);
+                if (atual) return atual;
+
+                const antigo = this.lerJson(this.CHAVE_METADATA_ANTIGA);
+                return antigo ? { ...antigo, legado: true } : null;
             }
 
             static async deveFazerScanCompleto() {
                 const metadata = await this.obterMetadata();
                 if (!metadata || !metadata.timestamp) return true;
+                // Um cache de versão anterior não contém a lista oficial: faz uma
+                // sincronização completa uma vez, para permitir entradas e saídas.
+                if (!Array.isArray(metadata.codigosOficiais) || metadata.codigosOficiais.length === 0) return true;
                 return Date.now() - metadata.timestamp >= CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
             }
 
@@ -711,36 +741,78 @@
                 }, 60000);
             }
 
+            static async obterListaParaConsulta() {
+                try {
+                    return await buscarCodigosAtuaisNoJupiter();
+                } catch (erro) {
+                    console.warn('Não foi possível ler a lista oficial:', erro);
+                    const metadata = await CacheManager.obterMetadata();
+                    const codigosSalvos = Array.isArray(metadata?.codigosOficiais)
+                        ? metadata.codigosOficiais.filter(codigo => /^PNV\d{4}$/i.test(codigo))
+                        : [];
+                    const codigos = codigosSalvos.length ? codigosSalvos : CONFIGURACAO.CODIGOS_PNV_RESERVA;
+
+                    return {
+                        codigos,
+                        origem: codigosSalvos.length
+                            ? 'última lista oficial salva no navegador'
+                            : 'lista de reserva embutida no arquivo',
+                        atualizadaEm: Date.now(),
+                        fallback: true,
+                        aviso: `Não foi possível consultar agora a lista oficial do Júpiter (${erro?.message || 'erro desconhecido'}). Foi usada ${codigosSalvos.length ? 'a última lista salva' : 'a lista de reserva'}.`
+                    };
+                }
+            }
+
             static async executarScanCompleto() {
                 if (this.executando.scanCompleto || this.executando.atualizacaoLeve) return;
 
                 this.executando.scanCompleto = true;
                 limparAlertas();
                 definirStatus('carregando');
+                const avisos = [];
 
                 try {
-                    const codigosPNV = CONFIGURACAO.CODIGOS_PNV;
-                    mostrarCarregando(`Consulta gradual: preparando ${codigosPNV.length} disciplinas PNV...`);
-                    atualizarContador('⏳ Iniciando consulta...');
+                    mostrarCarregando('📋 Conferindo no Júpiter a lista atual de disciplinas PNV...');
+                    atualizarContador('📋 Conferindo lista atual de disciplinas PNV...');
+
+                    const listaInfo = await this.obterListaParaConsulta();
+                    const codigosPNV = listaInfo.codigos;
+                    atualizarInfoLista(listaInfo);
+                    if (listaInfo.aviso) avisos.push(listaInfo.aviso);
+
+                    mostrarCarregando(`Consulta gradual: preparando ${codigosPNV.length} disciplinas da lista atual...`);
+                    atualizarContador(`⏳ Lista atual: ${codigosPNV.length} códigos PNV. Iniciando consulta de turmas...`);
 
                     const resultado = await buscarDisciplinasComLimite(codigosPNV, {
                         aoProgredir: (concluidas, total, encontradas, falhas) => {
                             mostrarCarregando(`Consulta gradual: ${concluidas}/${total}. Com turmas: ${encontradas}. Falhas: ${falhas}.`);
-                            atualizarContador(`⚡ ${concluidas}/${total} consultadas — ${encontradas} com turmas`);
+                            atualizarContador(`⚡ ${concluidas}/${total} disciplinas consultadas — ${encontradas} com turmas`);
                         }
                     });
 
-                    todasDisciplinas = resultado.disciplinas.filter(d => d.turmas && d.turmas.length > 0);
-                    await CacheManager.salvarDisciplinas(todasDisciplinas);
+                    // Removidas da lista oficial: não permanecem no monitor. Se uma
+                    // disciplina ainda listada falhar, os últimos dados dela são preservados.
+                    const codigosAtuais = new Set(codigosPNV);
+                    const atualizadasPorCodigo = new Map(resultado.disciplinas.map(disciplina => [disciplina.codigo, disciplina]));
+                    const preservadas = todasDisciplinas.filter(disciplina =>
+                        codigosAtuais.has(disciplina.codigo) && !atualizadasPorCodigo.has(disciplina.codigo)
+                    );
+                    todasDisciplinas = [
+                        ...resultado.disciplinas.filter(d => d.turmas && d.turmas.length > 0),
+                        ...preservadas.filter(d => d.turmas && d.turmas.length > 0)
+                    ];
 
+                    await CacheManager.salvarDisciplinas(todasDisciplinas, listaInfo);
                     atualizarUltimaAtualizacao();
                     definirStatus('sucesso');
                     renderizar();
-                    atualizarContador(`✅ ${todasDisciplinas.length} disciplina(s) com turma(s) encontradas`);
+                    atualizarContador(`✅ ${todasDisciplinas.length} disciplina(s) com turma(s) — ${codigosPNV.length} código(s) na lista atual`);
 
                     if (resultado.falhas > 0) {
-                        mostrarAlerta(`A consulta terminou, mas ${resultado.falhas} disciplina(s) não responderam. Use “Consultar as 58 disciplinas” para tentar novamente.`);
+                        avisos.push(`${resultado.falhas} disciplina(s) não responderam. ${preservadas.length ? `${preservadas.length} dado(s) anterior(es) ainda válido(s) foram mantidos.` : ''} Use “Consultar lista atual do Júpiter” para tentar novamente.`);
                     }
+                    if (avisos.length) mostrarAlerta(avisos.join(' '));
                 } catch (erro) {
                     console.error('Erro ao fazer scan completo:', erro);
                     definirStatus('erro');
@@ -856,6 +928,36 @@
             await esperar(Math.max(0, proximaConsultaPermitida - Date.now()));
         }
 
+        function extrairCodigosDaListaOficial(html) {
+            // A página lista cada disciplina com sua sigla. O Set preserva a ordem
+            // original e elimina repetições causadas por links e cabeçalhos.
+            const texto = htmlParaTexto(html);
+            const codigos = Array.from(texto.matchAll(/\bPNV\s*(\d{4})\b/gi), item => `PNV${item[1]}`);
+            return [...new Set(codigos)];
+        }
+
+        async function buscarCodigosAtuaisNoJupiter() {
+            const ordem = [
+                indiceProxyPreferido,
+                ...CONFIGURACAO.PROXIES_CORS.map((_, indice) => indice).filter(indice => indice !== indiceProxyPreferido)
+            ];
+            const html = await buscarPrimeiraRespostaValida(
+                CONFIGURACAO.URL_LISTA_DISCIPLINAS,
+                ordem,
+                resposta => extrairCodigosDaListaOficial(resposta).length > 0,
+                'a lista de disciplinas PNV'
+            );
+            const codigos = extrairCodigosDaListaOficial(html);
+            if (!codigos.length) throw new Error('A lista oficial não continha códigos PNV reconhecíveis');
+
+            return {
+                codigos,
+                origem: 'lista oficial do Júpiter',
+                atualizadaEm: Date.now(),
+                fallback: false
+            };
+        }
+
         async function buscarDetalhesDiscip(codigoDiscip) {
             const urlAlvo = CONFIGURACAO.URL_DETALHES_TURMA + encodeURIComponent(codigoDiscip);
             const ordem = [
@@ -864,7 +966,12 @@
             ];
 
             try {
-                const html = await buscarPrimeiraRespostaValida(urlAlvo, ordem);
+                const html = await buscarPrimeiraRespostaValida(
+                    urlAlvo,
+                    ordem,
+                    html => /Lista\s+de\s+Turmas|C[oó]digo\s+da\s+Turma|C digo\s+da\s+Turma/i.test(html),
+                    'os dados de turma da disciplina'
+                );
                 if (!html || html.length < 100) throw new Error('Resposta vazia ou incompleta');
                 if (/Nenhum registro encontrado|nenhum registro/i.test(html)) return null;
 
@@ -881,7 +988,7 @@
             }
         }
 
-        async function buscarPrimeiraRespostaValida(urlAlvo, ordem) {
+        async function buscarPrimeiraRespostaValida(urlAlvo, ordem, validarResposta, descricao = 'os dados solicitados') {
             const erros = [];
 
             // A fila é serial e espaçada. Em caso de HTTP 429, há uma pausa antes
@@ -894,8 +1001,8 @@
                         await aguardarJanelaDeConsulta();
                         const html = await buscarTextoComTimeout(urlProxy);
                         if (!html || html.length < 100) throw new Error('Resposta vazia ou incompleta');
-                        if (!/Lista\s+de\s+Turmas|C[oó]digo\s+da\s+Turma|C digo\s+da\s+Turma/i.test(html)) {
-                            throw new Error('O proxy retornou uma página intermediária, não os dados do Júpiter');
+                        if (typeof validarResposta === 'function' && !validarResposta(html)) {
+                            throw new Error(`O proxy retornou uma página intermediária, não ${descricao}`);
                         }
                         indiceProxyPreferido = indiceProxy;
                         return html;
@@ -903,8 +1010,6 @@
                         erros.push(erro?.message || String(erro));
 
                         if (ehRateLimit(erro) && tentativa < CONFIGURACAO.TENTATIVAS_POR_PROXY_EM_429) {
-                            // Prefere o outro proxy na próxima disciplina, mas aguarda
-                            // antes de repetir esta mesma consulta.
                             indiceProxyPreferido = (indiceProxy + 1) % CONFIGURACAO.PROXIES_CORS.length;
                             await aplicarPausaPorRateLimit();
                             continue;
@@ -917,7 +1022,7 @@
                 }
             }
 
-            throw new Error(erros.join(' | ') || 'todos os proxies falharam');
+            throw new Error(erros.join(' | ') || `nenhum proxy retornou ${descricao}`);
         }
 
         async function buscarTextoComTimeout(url) {
@@ -1209,6 +1314,19 @@
             return div.innerHTML;
         }
 
+        function atualizarInfoLista(listaInfo) {
+            const alvo = document.getElementById('fonteLista');
+            if (!alvo) return;
+
+            const quantidade = Array.isArray(listaInfo?.codigos) ? listaInfo.codigos.length : 0;
+            const quando = listaInfo?.atualizadaEm
+                ? new Date(listaInfo.atualizadaEm).toLocaleString('pt-BR')
+                : 'data não disponível';
+            const marcador = listaInfo?.fallback ? '⚠️' : '📋';
+            const origem = listaInfo?.origem || 'lista não informada';
+            alvo.textContent = `${marcador} Lista de disciplinas: ${quantidade} código(s) — ${origem} (${quando}).`;
+        }
+
         function iniciarContagemRegressiva() {
             setInterval(async () => {
                 const tempoProxAtu = await CacheManager.tempoAteProximaAtualizacao();
@@ -1233,7 +1351,7 @@
             return SistemaFundo.executando.scanCompleto || SistemaFundo.executando.atualizacaoLeve;
         }
 
-        function definirBotoesAtualizacao(desabilitados, textoAtualizar = '🔄 Atualizar disciplinas exibidas', textoTudo = '🔁 Consultar as 58 disciplinas') {
+        function definirBotoesAtualizacao(desabilitados, textoAtualizar = '🔄 Atualizar disciplinas exibidas', textoTudo = '🔁 Consultar lista atual do Júpiter') {
             const botaoAtualizar = document.getElementById('botaoAtualizar');
             const botaoAtualizarTudo = document.getElementById('botaoAtualizarTudo');
 
@@ -1246,7 +1364,7 @@
         async function forcarAtualizacao() {
             if (consultasEmAndamento()) return;
 
-            definirBotoesAtualizacao(true, '⏳ Atualizando exibidas...', '🔁 Consultar as 58 disciplinas');
+            definirBotoesAtualizacao(true, '⏳ Atualizando exibidas...', '🔁 Consultar lista atual do Júpiter');
             try {
                 if (todasDisciplinas.length === 0) {
                     await SistemaFundo.executarScanCompleto();
@@ -1261,10 +1379,10 @@
         async function forcarAtualizacaoTotal() {
             if (consultasEmAndamento()) return;
 
-            definirBotoesAtualizacao(true, '🔄 Atualizar disciplinas exibidas', '⏳ Consultando as 58...');
+            definirBotoesAtualizacao(true, '🔄 Atualizar disciplinas exibidas', '⏳ Conferindo lista atual...');
             try {
-                // Faz uma nova leitura de toda a lista configurada, inclusive disciplinas
-                // que ainda não apareciam no cache local.
+                // Primeiro lê a lista atual no Júpiter e, em seguida, consulta as
+                // turmas de cada código. Entradas removidas deixam de aparecer.
                 await SistemaFundo.executarScanCompleto();
             } finally {
                 definirBotoesAtualizacao(false);
@@ -1311,6 +1429,15 @@
         document.addEventListener('DOMContentLoaded', async () => {
             try {
                 const disciplinasCache = await CacheManager.carregarDisciplinas();
+                const metadataCache = await CacheManager.obterMetadata();
+                if (metadataCache?.codigosOficiais?.length) {
+                    atualizarInfoLista({
+                        codigos: metadataCache.codigosOficiais,
+                        origem: metadataCache.origemLista || 'última lista salva no navegador',
+                        atualizadaEm: metadataCache.listaOficialSincronizadaEm || metadataCache.timestamp,
+                        fallback: Boolean(metadataCache.listaEmModoReserva)
+                    });
+                }
                 if (disciplinasCache?.length) {
                     todasDisciplinas = disciplinasCache;
                     renderizar();
