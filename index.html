@@ -404,7 +404,7 @@
                     <div class="status-dot" id="indicadorStatus"></div>
                     <div>
                         <div>Última atualização: <strong id="ultimaAtualizacao">--:--:--</strong></div>
-                        <div>Próxima em: <strong id="proximaAtualizacao">60</strong>s</div>
+                        <div id="proximaAtualizacaoInfo">Próxima em: <strong id="proximaAtualizacao">--</strong></div>
                     </div>
                 </div>
                 <div class="botoes-controle">
@@ -417,7 +417,7 @@
 
         <!-- Contador de disciplinas -->
         <div class="contador-disciplinas" id="contadorDisciplinas">
-            🔍 Escaneando disciplinas PNV...
+            🔍 Carregando dados...
         </div>
 
         <!-- Filtros -->
@@ -447,23 +447,229 @@
 
         <!-- Rodapé -->
         <div class="rodape-info">
-            💡 A página atualiza automaticamente a cada 60 segundos com as informações mais recentes do Jupiter
+            💡 Scan completo a cada 15 dias | Atualizações rápidas a cada 5 minutos | Funciona automaticamente 24/7
         </div>
     </div>
 
     <script>
         const CONFIGURACAO = {
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
-            INTERVALO_ATUALIZACAO: 60000, // 60 segundos
+            INTERVALO_ATUALIZACAO_LEVE: 5 * 60 * 1000,    // 5 minutos
+            INTERVALO_SCAN_COMPLETO: 15 * 24 * 60 * 60 * 1000, // 15 dias
             PROXY_CORS: 'https://api.allorigins.win/raw?url=',
         };
 
         let todasDisciplinas = [];
-        let intervaloAtualizacao = null;
         let filtroAtual = 'todos';
-        let contagemRegressiva = CONFIGURACAO.INTERVALO_ATUALIZACAO / 1000;
+        let proximoUpdate = 0;
+        let ultimoScanCompleto = 0;
 
-        // Lista de todos os códigos PNV possíveis (PNV0000 a PNV9999)
+        // ===== GERENCIAMENTO DE CACHE E PERSISTÊNCIA =====
+        class CacheManager {
+            static async salvarDisciplinas(disciplinas) {
+                const metadata = {
+                    timestamp: Date.now(),
+                    quantidade: disciplinas.length,
+                    tipo: 'scan_completo'
+                };
+                
+                try {
+                    localStorage.setItem('pnv_disciplinas_v1', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v1', JSON.stringify(metadata));
+                } catch (e) {
+                    console.error('Erro ao salvar cache:', e);
+                }
+            }
+
+            static async salvarAtualizacaoLeve(disciplinas) {
+                const metadata = JSON.parse(localStorage.getItem('pnv_metadata_v1') || '{}');
+                metadata.ultimaAtualizacaoLeve = Date.now();
+                metadata.tipo = metadata.tipo || 'cache';
+                
+                try {
+                    localStorage.setItem('pnv_disciplinas_v1', JSON.stringify(disciplinas));
+                    localStorage.setItem('pnv_metadata_v1', JSON.stringify(metadata));
+                } catch (e) {
+                    console.error('Erro ao salvar atualização:', e);
+                }
+            }
+
+            static async carregarDisciplinas() {
+                try {
+                    const dados = localStorage.getItem('pnv_disciplinas_v1');
+                    return dados ? JSON.parse(dados) : null;
+                } catch (e) {
+                    console.error('Erro ao carregar cache:', e);
+                    return null;
+                }
+            }
+
+            static async obterMetadata() {
+                try {
+                    const dados = localStorage.getItem('pnv_metadata_v1');
+                    return dados ? JSON.parse(dados) : null;
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            static async deveFazerScanCompleto() {
+                const metadata = await this.obterMetadata();
+                if (!metadata) return true;
+
+                const agora = Date.now();
+                const tempoDecorrido = agora - metadata.timestamp;
+                return tempoDecorrido >= CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
+            }
+
+            static async tempoAteProximoScan() {
+                const metadata = await this.obterMetadata();
+                if (!metadata) return 0;
+
+                const proximoScan = metadata.timestamp + CONFIGURACAO.INTERVALO_SCAN_COMPLETO;
+                const agora = Date.now();
+                return Math.max(0, proximoScan - agora);
+            }
+
+            static async tempoAteProximaAtualizacao() {
+                const metadata = await this.obterMetadata();
+                if (!metadata || !metadata.ultimaAtualizacaoLeve) {
+                    return CONFIGURACAO.INTERVALO_ATUALIZACAO_LEVE;
+                }
+
+                const proximaAtualizacao = metadata.ultimaAtualizacaoLeve + CONFIGURACAO.INTERVALO_ATUALIZACAO_LEVE;
+                const agora = Date.now();
+                return Math.max(0, proximaAtualizacao - agora);
+            }
+        }
+
+        // ===== SISTEMA DE FUNDO - EXECUTA INDEPENDENTEMENTE =====
+        class SistemaFundo {
+            static executando = {
+                scanCompleto: false,
+                atualizacaoLeve: false
+            };
+
+            static async iniciar() {
+                console.log('🚀 Sistema de fundo iniciado');
+                
+                // Executar primeira ação apropriada
+                const deveScan = await CacheManager.deveFazerScanCompleto();
+                const tempoAteProx = await CacheManager.tempoAteProximaAtualizacao();
+                
+                if (deveScan) {
+                    await this.executarScanCompleto();
+                } else if (tempoAteProx <= 0) {
+                    await this.executarAtualizacaoLeve();
+                }
+
+                // Agendar próxima ação
+                this.agendarProximaAcao();
+            }
+
+            static agendarProximaAcao() {
+                // Verificar a cada 1 minuto qual ação executar
+                setInterval(async () => {
+                    const deveScan = await CacheManager.deveFazerScanCompleto();
+                    const tempoAteProxAtu = await CacheManager.tempoAteProximaAtualizacao();
+
+                    if (deveScan && !this.executando.scanCompleto) {
+                        await this.executarScanCompleto();
+                    } else if (tempoAteProxAtu <= 0 && !this.executando.atualizacaoLeve) {
+                        await this.executarAtualizacaoLeve();
+                    }
+                }, 60000); // Verificar a cada minuto
+            }
+
+            static async executarScanCompleto() {
+                if (this.executando.scanCompleto) return;
+                
+                this.executando.scanCompleto = true;
+                console.log('📊 Iniciando scan completo em background...');
+                definirStatus('carregando');
+
+                try {
+                    const todosCodigos = gerarCodigosPNV();
+                    const disciplinas = await buscarDisciplinasComLimite(todosCodigos, false);
+                    todasDisciplinas = disciplinas.filter(d => d.turmas && d.turmas.length > 0);
+
+                    await CacheManager.salvarDisciplinas(todasDisciplinas);
+                    ultimoScanCompleto = Date.now();
+                    
+                    console.log(`✅ Scan completo concluído: ${todasDisciplinas.length} disciplinas`);
+                    atualizarUltimaAtualizacao();
+                    definirStatus('sucesso');
+                    renderizar();
+                    atualizarContador();
+                } catch (erro) {
+                    console.error('Erro ao fazer scan completo:', erro);
+                    definirStatus('erro');
+                } finally {
+                    this.executando.scanCompleto = false;
+                }
+            }
+
+            static async executarAtualizacaoLeve() {
+                if (this.executando.atualizacaoLeve || todasDisciplinas.length === 0) return;
+                
+                this.executando.atualizacaoLeve = true;
+                console.log('🔄 Iniciando atualização leve em background...');
+                definirStatus('carregando');
+
+                try {
+                    const codigosDisciplinas = todasDisciplinas.map(d => d.codigo);
+                    const atualizados = await buscarDisciplinasComLimite(codigosDisciplinas, true);
+
+                    atualizados.forEach(disciplinaAtualizada => {
+                        const indice = todasDisciplinas.findIndex(d => d.codigo === disciplinaAtualizada.codigo);
+                        if (indice !== -1) {
+                            todasDisciplinas[indice].turmas = disciplinaAtualizada.turmas;
+                        }
+                    });
+
+                    await CacheManager.salvarAtualizacaoLeve(todasDisciplinas);
+                    
+                    console.log('✅ Atualização leve concluída');
+                    atualizarUltimaAtualizacao();
+                    definirStatus('sucesso');
+                    renderizar();
+                } catch (erro) {
+                    console.error('Erro ao atualizar:', erro);
+                    definirStatus('erro');
+                } finally {
+                    this.executando.atualizacaoLeve = false;
+                }
+            }
+        }
+
+        // ===== INICIALIZAÇÃO DA PÁGINA =====
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Carregar dados do cache
+                const disciplinasCache = await CacheManager.carregarDisciplinas();
+                
+                if (disciplinasCache && disciplinasCache.length > 0) {
+                    todasDisciplinas = disciplinasCache;
+                    renderizar();
+                    atualizarContador();
+                    atualizarUltimaAtualizacao();
+                } else {
+                    mostrarCarregando('🔄 Carregando dados iniciais...');
+                }
+
+                // Inicializar sistema de fundo
+                SistemaFundo.iniciar();
+
+                // Atualizar contagem regressiva a cada segundo
+                iniciarContagemRegressiva();
+
+            } catch (erro) {
+                console.error('Erro ao inicializar:', erro);
+                mostrarAlerta('Erro ao inicializar: ' + erro.message);
+            }
+        });
+
+        // ===== FUNÇÕES PRINCIPAIS =====
         function gerarCodigosPNV() {
             const codigos = [];
             for (let i = 0; i <= 9999; i++) {
@@ -472,82 +678,9 @@
             return codigos;
         }
 
-        // Inicializar ao carregar a página
-        document.addEventListener('DOMContentLoaded', () => {
-            carregarDisciplinas();
-            iniciarAtualizacaoAutomatica();
-            iniciarContagemRegressiva();
-        });
-
-        function definirFiltro(filtro) {
-            filtroAtual = filtro;
-            document.querySelectorAll('.btn-filtro').forEach(btn => btn.classList.remove('ativo'));
-            event.target.classList.add('ativo');
-            renderizar();
-        }
-
-        function forcarAtualizacao() {
-            const botao = document.getElementById('botaoAtualizar');
-            botao.disabled = true;
-            botao.textContent = '⏳ Carregando...';
-            carregarDisciplinas().finally(() => {
-                botao.disabled = false;
-                botao.textContent = '🔄 Atualizar Agora';
-            });
-        }
-
-        function iniciarContagemRegressiva() {
-            setInterval(() => {
-                contagemRegressiva--;
-                if (contagemRegressiva < 0) {
-                    contagemRegressiva = CONFIGURACAO.INTERVALO_ATUALIZACAO / 1000;
-                }
-                document.getElementById('proximaAtualizacao').textContent = Math.ceil(contagemRegressiva);
-            }, 1000);
-        }
-
-        function iniciarAtualizacaoAutomatica() {
-            intervaloAtualizacao = setInterval(() => {
-                carregarDisciplinas();
-                contagemRegressiva = CONFIGURACAO.INTERVALO_ATUALIZACAO / 1000;
-            }, CONFIGURACAO.INTERVALO_ATUALIZACAO);
-        }
-
-        async function carregarDisciplinas() {
-            definirStatus('carregando');
-            const containerAlertas = document.getElementById('containerAlertas');
-            containerAlertas.innerHTML = '';
-
-            try {
-                // Gerar todos os códigos PNV
-                const todosCodigos = gerarCodigosPNV();
-                
-                document.getElementById('contadorDisciplinas').innerHTML = 
-                    `🔄 Escaneando ${todosCodigos.length} disciplinas PNV... Esta operação pode levar alguns minutos.`;
-
-                // Buscar detalhes de cada disciplina em paralelo (com limite)
-                todasDisciplinas = await buscarDisciplinasComLimite(todosCodigos);
-
-                // Filtrar disciplinas vazias
-                todasDisciplinas = todasDisciplinas.filter(d => d.turmas && d.turmas.length > 0);
-
-                atualizarUltimaAtualizacao();
-                definirStatus('sucesso');
-                
-                document.getElementById('contadorDisciplinas').innerHTML = 
-                    `✅ ${todasDisciplinas.length} disciplina(s) com vagas encontrada(s)`;
-                
-                renderizar();
-            } catch (erro) {
-                console.error('Erro ao carregar:', erro);
-                definirStatus('erro');
-                mostrarAlerta(erro.message);
-            }
-        }
-
-        async function buscarDisciplinasComLimite(codigos) {
+        async function buscarDisciplinasComLimite(codigos, atualizacaoLeve = false) {
             const disciplinas = [];
-            const limiteParalelo = 10; // Buscar 10 disciplinas em paralelo
+            const limiteParalelo = 10;
             
             for (let i = 0; i < codigos.length; i += limiteParalelo) {
                 const lote = codigos.slice(i, i + limiteParalelo);
@@ -560,11 +693,6 @@
                         disciplinas.push(resultado.value);
                     }
                 });
-
-                // Atualizar feedback de progresso
-                const progresso = Math.min(i + limiteParalelo, codigos.length);
-                document.getElementById('contadorDisciplinas').innerHTML = 
-                    `🔄 Escaneando ${codigos.length} disciplinas... (${progresso}/${codigos.length})`;
             }
 
             return disciplinas;
@@ -583,14 +711,12 @@
                 
                 const html = await resposta.text();
 
-                // Verificar se a disciplina realmente existe (se há conteúdo relevante)
                 if (!html || html.length < 100 || html.includes('Nenhum registro encontrado') || html.includes('nenhum registro')) {
                     return null;
                 }
 
                 const turmas = extrairDetalhesTormas(html);
                 
-                // Se não há turmas, a disciplina não está sendo oferecida este semestre
                 if (turmas.length === 0) {
                     return null;
                 }
@@ -603,7 +729,6 @@
 
                 return discip;
             } catch (erro) {
-                // Silenciosamente ignorar disciplinas que não existem ou com erro de conexão
                 return null;
             }
         }
@@ -618,12 +743,10 @@
         function extrairDetalhesTormas(html) {
             const turmas = [];
             
-            // Procurar por linhas de tabela com informações de turma
             const regexLinhas = /<tr[^>]*>[\s\S]*?<\/tr>/gi;
             const correspondencias = html.match(regexLinhas) || [];
 
             correspondencias.forEach((linha, indice) => {
-                // Pular linhas de cabeçalho
                 if (indice === 0 || linha.includes('th')) return;
 
                 const turma = {
@@ -634,7 +757,6 @@
                     total: 0
                 };
 
-                // Extrair informações de vagas (formato: ocupadas/total)
                 const regexVagas = /(\d+)\s*\/\s*(\d+)/;
                 const linhaTexto = linha.replace(/<[^>]+>/g, ' ');
                 const matchVagas = linhaTexto.match(regexVagas);
@@ -684,6 +806,13 @@
             });
         }
 
+        function definirFiltro(filtro) {
+            filtroAtual = filtro;
+            document.querySelectorAll('.btn-filtro').forEach(btn => btn.classList.remove('ativo'));
+            event.target.classList.add('ativo');
+            renderizar();
+        }
+
         function renderizar() {
             const conteudo = document.getElementById('conteudo');
             const filtradas = filtrarDisciplinas();
@@ -729,6 +858,37 @@
             conteudo.innerHTML = `<div class="grid-disciplinas">${html}</div>`;
         }
 
+        async function iniciarContagemRegressiva() {
+            setInterval(async () => {
+                const tempoProxAtu = await CacheManager.tempoAteProximaAtualizacao();
+                const tempoProxScan = await CacheManager.tempoAteProximoScan();
+
+                if (tempoProxAtu > 0) {
+                    const minutos = Math.floor(tempoProxAtu / 60000);
+                    const segundos = Math.floor((tempoProxAtu % 60000) / 1000);
+                    const texto = minutos > 0 ? `${minutos}m ${segundos}s (atualização)` : `${segundos}s (atualização)`;
+                    document.getElementById('proximaAtualizacao').textContent = texto;
+                } else if (tempoProxScan > 0) {
+                    const dias = Math.floor(tempoProxScan / (24 * 60 * 60 * 1000));
+                    const horas = Math.floor((tempoProxScan % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+                    document.getElementById('proximaAtualizacao').textContent = `${dias}d ${horas}h (scan)`;
+                }
+            }, 1000);
+        }
+
+        async function forcarAtualizacao() {
+            const botao = document.getElementById('botaoAtualizar');
+            botao.disabled = true;
+            botao.textContent = '⏳ Carregando...';
+            
+            try {
+                await SistemaFundo.executarAtualizacaoLeve();
+            } finally {
+                botao.disabled = false;
+                botao.textContent = '🔄 Atualizar Agora';
+            }
+        }
+
         function definirStatus(status) {
             const indicador = document.getElementById('indicadorStatus');
             indicador.className = 'status-dot';
@@ -751,12 +911,27 @@
             document.getElementById('ultimaAtualizacao').textContent = hora;
         }
 
+        function atualizarContador() {
+            document.getElementById('contadorDisciplinas').innerHTML = 
+                `✅ ${todasDisciplinas.length} disciplina(s) com vagas encontrada(s)`;
+        }
+
         function mostrarAlerta(mensagem) {
             const container = document.getElementById('containerAlertas');
             container.innerHTML = `
                 <div class="alerta">
                     <div class="alerta-icone">⚠️</div>
                     <div>${mensagem}</div>
+                </div>
+            `;
+        }
+
+        function mostrarCarregando(mensagem) {
+            const conteudo = document.getElementById('conteudo');
+            conteudo.innerHTML = `
+                <div class="carregando">
+                    <div class="spinner"></div>
+                    <div class="texto-carregando">${mensagem}</div>
                 </div>
             `;
         }
