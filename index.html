@@ -328,6 +328,18 @@
             font-size: 12px;
         }
 
+        .contador-disciplinas {
+            background: #e8f5e9;
+            border: 1px solid #4CAF50;
+            color: #2e7d32;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 24px;
@@ -385,7 +397,7 @@
         <!-- Cabeçalho -->
         <div class="header">
             <h1>📚 Monitor de Vagas - PNV</h1>
-            <p class="header-subtitle">Monitoramento em tempo real das disciplinas disponíveis</p>
+            <p class="header-subtitle">Monitoramento em tempo real de todas as disciplinas PNV disponíveis</p>
             
             <div class="header-controls">
                 <div class="status-info">
@@ -401,6 +413,11 @@
                     </button>
                 </div>
             </div>
+        </div>
+
+        <!-- Contador de disciplinas -->
+        <div class="contador-disciplinas" id="contadorDisciplinas">
+            🔍 Escaneando disciplinas PNV...
         </div>
 
         <!-- Filtros -->
@@ -436,7 +453,6 @@
 
     <script>
         const CONFIGURACAO = {
-            URL_LISTA_DISCIPLINAS: 'https://uspdigital.usp.br/jupiterweb/obterDisciplina?nomdis=&sgldis=PNV',
             URL_DETALHES_TURMA: 'https://uspdigital.usp.br/jupiterweb/obterTurma?sgldis=',
             INTERVALO_ATUALIZACAO: 60000, // 60 segundos
             PROXY_CORS: 'https://api.allorigins.win/raw?url=',
@@ -446,6 +462,15 @@
         let intervaloAtualizacao = null;
         let filtroAtual = 'todos';
         let contagemRegressiva = CONFIGURACAO.INTERVALO_ATUALIZACAO / 1000;
+
+        // Lista de todos os códigos PNV possíveis (PNV0000 a PNV9999)
+        function gerarCodigosPNV() {
+            const codigos = [];
+            for (let i = 0; i <= 9999; i++) {
+                codigos.push(`PNV${String(i).padStart(4, '0')}`);
+            }
+            return codigos;
+        }
 
         // Inicializar ao carregar a página
         document.addEventListener('DOMContentLoaded', () => {
@@ -494,24 +519,24 @@
             containerAlertas.innerHTML = '';
 
             try {
-                // Buscar lista de disciplinas PNV
-                const listaHTML = await buscarListaDisciplinas();
-                const listaCodigos = extrairCodigosDisciplinas(listaHTML);
+                // Gerar todos os códigos PNV
+                const todosCodigos = gerarCodigosPNV();
+                
+                document.getElementById('contadorDisciplinas').innerHTML = 
+                    `🔄 Escaneando ${todosCodigos.length} disciplinas PNV... Esta operação pode levar alguns minutos.`;
 
-                if (listaCodigos.length === 0) {
-                    throw new Error('Nenhuma disciplina PNV encontrada neste semestre');
-                }
-
-                // Buscar detalhes de cada disciplina
-                todasDisciplinas = await Promise.all(
-                    listaCodigos.map(codigo => buscarDetalhesDiscip(codigo))
-                );
+                // Buscar detalhes de cada disciplina em paralelo (com limite)
+                todasDisciplinas = await buscarDisciplinasComLimite(todosCodigos);
 
                 // Filtrar disciplinas vazias
                 todasDisciplinas = todasDisciplinas.filter(d => d.turmas && d.turmas.length > 0);
 
                 atualizarUltimaAtualizacao();
                 definirStatus('sucesso');
+                
+                document.getElementById('contadorDisciplinas').innerHTML = 
+                    `✅ ${todasDisciplinas.length} disciplina(s) com vagas encontrada(s)`;
+                
                 renderizar();
             } catch (erro) {
                 console.error('Erro ao carregar:', erro);
@@ -520,42 +545,73 @@
             }
         }
 
-        async function buscarListaDisciplinas() {
-            const url = CONFIGURACAO.PROXY_CORS + encodeURIComponent(CONFIGURACAO.URL_LISTA_DISCIPLINAS);
-            const resposta = await fetch(url);
-            if (!resposta.ok) throw new Error(`Erro ao buscar disciplinas: ${resposta.status}`);
-            return await resposta.text();
-        }
+        async function buscarDisciplinasComLimite(codigos) {
+            const disciplinas = [];
+            const limiteParalelo = 10; // Buscar 10 disciplinas em paralelo
+            
+            for (let i = 0; i < codigos.length; i += limiteParalelo) {
+                const lote = codigos.slice(i, i + limiteParalelo);
+                const resultados = await Promise.allSettled(
+                    lote.map(codigo => buscarDetalhesDiscip(codigo))
+                );
+                
+                resultados.forEach(resultado => {
+                    if (resultado.status === 'fulfilled' && resultado.value) {
+                        disciplinas.push(resultado.value);
+                    }
+                });
 
-        function extrairCodigosDisciplinas(html) {
-            const regex = /PNV\d{4}/g;
-            const codigos = html.match(regex) || [];
-            return [...new Set(codigos)]; // Remove duplicatas
+                // Atualizar feedback de progresso
+                const progresso = Math.min(i + limiteParalelo, codigos.length);
+                document.getElementById('contadorDisciplinas').innerHTML = 
+                    `🔄 Escaneando ${codigos.length} disciplinas... (${progresso}/${codigos.length})`;
+            }
+
+            return disciplinas;
         }
 
         async function buscarDetalhesDiscip(codigoDiscip) {
             try {
                 const url = CONFIGURACAO.PROXY_CORS + encodeURIComponent(CONFIGURACAO.URL_DETALHES_TURMA + codigoDiscip);
-                const resposta = await fetch(url, { timeout: 10000 });
-                if (!resposta.ok) throw new Error(`Erro ao buscar: ${resposta.status}`);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+                const resposta = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (!resposta.ok) return null;
+                
                 const html = await resposta.text();
+
+                // Verificar se a disciplina realmente existe (se há conteúdo relevante)
+                if (!html || html.length < 100 || html.includes('Nenhum registro encontrado') || html.includes('nenhum registro')) {
+                    return null;
+                }
+
+                const turmas = extrairDetalhesTormas(html);
+                
+                // Se não há turmas, a disciplina não está sendo oferecida este semestre
+                if (turmas.length === 0) {
+                    return null;
+                }
 
                 const discip = {
                     codigo: codigoDiscip,
                     nome: extrairNomeDiscip(html),
-                    turmas: extrairDetalhesTormas(html)
+                    turmas: turmas
                 };
 
                 return discip;
             } catch (erro) {
-                console.error(`Erro ao buscar ${codigoDiscip}:`, erro);
-                return { codigo: codigoDiscip, nome: 'Erro ao carregar', turmas: [] };
+                // Silenciosamente ignorar disciplinas que não existem ou com erro de conexão
+                return null;
             }
         }
 
         function extrairNomeDiscip(html) {
             const mapa = html.match(/<h\d[^>]*>([^<]*PNV[^<]*)<\/h\d>/i) ||
-                        html.match(/PROGRAMA\s*:\s*([^<]+)/i);
+                        html.match(/PROGRAMA\s*[:=]\s*([^<]+)/i) ||
+                        html.match(/<title[^>]*>([^<]+)<\/title>/i);
             return mapa ? mapa[1].trim() : 'Disciplina';
         }
 
