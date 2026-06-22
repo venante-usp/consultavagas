@@ -647,7 +647,8 @@
 
             static async obterMetadata() {
                 try {
-                    const dados = localStorage.getItem('pnv_metadata_v5');
+                    // Deve usar a mesma versão das chaves gravadas em salvarDisciplinas/salvarAtualizacaoLeve.
+                    const dados = localStorage.getItem('pnv_metadata_v7');
                     return dados ? JSON.parse(dados) : null;
                 } catch (erro) {
                     return null;
@@ -985,7 +986,7 @@
         }
 
         function extrairTipoTurma(texto) {
-            const encontrado = texto.match(/Tipo\s+da\s+Turma\s*:\s*(.*?)(?=\s+(?:Observa|Hor[aá]rio|Vagas)\b|$)/i);
+            const encontrado = texto.match(/Tipo\s+da\s+Turma\s*:\s*(.*?)(?=\s+(?:Observa|Hor[aá]rio|Vagas)|$)/i);
             return normalizarTexto(encontrado?.[1] || '');
         }
 
